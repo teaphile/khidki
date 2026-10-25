@@ -96,7 +96,7 @@ If the server is unavailable, nothing is queued.
 ## Local setup
 
 ```bash
-git clone <your-repository-url> sotto
+git clone https://github.com/teaphile/sotto.git
 cd sotto
 npm install
 cp .env.example .env.local
