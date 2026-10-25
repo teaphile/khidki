@@ -1,0 +1,507 @@
+@media (max-width: 1200px) {
+  :root {
+    --rail-width: 72px;
+    --list-width: clamp(286px, 27vw, 348px);
+  }
+
+  .conversation-header__security {
+    display: none;
+  }
+
+  .rail-button,
+  .rail-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .rail__logo {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 980px) {
+  :root {
+    --list-width: clamp(280px, 30vw, 330px);
+  }
+
+  .list-header {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .list-search {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .message-scroll {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+}
+
+@media (max-width: 880px) {
+  :root {
+    --header-height: 66px;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100dvh;
+  }
+
+  .rail {
+    display: none;
+  }
+
+  .list-pane,
+  .chat-pane {
+    grid-area: 1 / 1;
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .list-pane {
+    border-right: 0;
+    background: var(--surface);
+  }
+
+  .workspace[data-view='chats'][data-active='true'] .list-pane {
+    display: none;
+  }
+
+  .workspace[data-view='chats'][data-active='false'] .chat-pane {
+    display: none;
+  }
+
+  .workspace[data-view='people'] .chat-pane {
+    display: none;
+  }
+
+  .workspace[data-view='people'] .list-pane {
+    display: flex;
+  }
+
+  .mobile-brand {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 58px;
+    padding: 12px 20px 0;
+  }
+
+  .mobile-brand .brand {
+    font-size: 22px;
+  }
+
+  .mobile-brand__tag {
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+
+  .list-header {
+    padding: 12px 18px 12px;
+  }
+
+  .list-header h1 {
+    font-size: 34px;
+  }
+
+  .people-view .list-header {
+    padding-top: 20px;
+  }
+
+  .list-footer-note {
+    display: none;
+  }
+
+  .mobile-nav {
+    display: grid;
+    flex: none;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding: 6px max(12px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--surface) 91%, transparent);
+    backdrop-filter: blur(16px);
+  }
+
+  .mobile-nav button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 48px;
+    padding: 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 680;
+    letter-spacing: 0.02em;
+  }
+
+  .mobile-nav button.is-active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .conversation-header__back {
+    display: inline-flex;
+  }
+
+  .conversation-header {
+    padding-right: 12px;
+    padding-left: 10px;
+  }
+
+  .conversation-header__security {
+    display: none;
+  }
+
+  .message-scroll {
+    padding: 18px 16px 10px;
+  }
+
+  .bubble {
+    max-width: 82%;
+  }
+
+  .composer {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .composer__hint,
+  .composer__meta {
+    display: none;
+  }
+
+  .welcome-pane {
+    padding: 28px;
+  }
+
+  .welcome-pane__inner {
+    align-items: center;
+    text-align: center;
+  }
+
+  .welcome-pane p {
+    margin-right: auto;
+    margin-left: auto;
+  }
+
+  .welcome-pane__actions,
+  .welcome-pane__facts {
+    justify-content: center;
+  }
+
+  .welcome-pane__facts {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .list-header {
+    padding: 12px 16px 10px;
+  }
+
+  .list-header h1 {
+    font-size: 32px;
+  }
+
+  .list-search {
+    min-height: 40px;
+    margin-right: 14px;
+    margin-bottom: 9px;
+    margin-left: 14px;
+  }
+
+  .conversation-scroll {
+    padding: 2px 7px 12px;
+  }
+
+  .conversation {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .conversation__time {
+    display: none;
+  }
+
+  .avatar {
+    width: 43px;
+    height: 43px;
+  }
+
+  .avatar--small {
+    width: 36px;
+    height: 36px;
+  }
+
+  .panel-intro {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .people-scroll {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .person-card {
+    padding: 9px 8px;
+  }
+
+  .person-card .button {
+    padding: 0 10px;
+  }
+
+  .conversation-header {
+    min-height: 60px;
+    gap: 8px;
+    padding: 9px 8px;
+  }
+
+  .conversation-header__actions .icon-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .conversation-header__identity strong {
+    font-size: 13.5px;
+  }
+
+  .message-scroll {
+    padding: 14px 11px 8px;
+  }
+
+  .bubble {
+    max-width: 88%;
+    padding: 8px 10px 6px;
+  }
+
+  .message-text {
+    font-size: 13.5px;
+  }
+
+  .attachment__file {
+    min-width: 160px;
+  }
+
+  .composer {
+    padding: 8px 8px max(6px, env(safe-area-inset-bottom));
+  }
+
+  .composer__row {
+    gap: 5px;
+  }
+
+  .composer__attach {
+    width: 38px;
+    height: 38px;
+  }
+
+  .composer__field textarea {
+    min-height: 40px;
+    padding: 10px 12px 5px;
+    border-radius: 16px;
+  }
+
+  .composer__send {
+    width: 40px;
+    height: 40px;
+  }
+
+  .conversation-empty {
+    padding: 22px 10px;
+  }
+
+  .conversation-empty h2 {
+    font-size: 27px;
+  }
+
+  .conversation-empty__rules span:nth-child(2) {
+    display: none;
+  }
+
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-width: none;
+    max-height: 94dvh;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .modal__header {
+    padding: 18px 18px 13px;
+  }
+
+  .modal__header h2 {
+    font-size: 23px;
+  }
+
+  .modal__body {
+    padding: 16px 18px;
+  }
+
+  .modal__footer {
+    padding: 12px 18px max(14px, env(safe-area-inset-bottom));
+  }
+
+  .toast-region {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: calc(100vw - 24px);
+  }
+
+  .setup-card {
+    padding: 24px 18px;
+    border-radius: var(--radius-lg);
+  }
+
+  .setup-topbar .brand {
+    font-size: 22px;
+  }
+
+  .fatal-card {
+    padding: 24px 18px;
+  }
+
+  .theme-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 390px) {
+  .mobile-brand {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .mobile-brand__tag {
+    display: none;
+  }
+
+  .list-header {
+    padding-right: 13px;
+    padding-left: 13px;
+  }
+
+  .list-search {
+    margin-right: 11px;
+    margin-left: 11px;
+  }
+
+  .conversation__preview {
+    font-size: 10.5px;
+  }
+
+  .conversation-header__identity span {
+    display: none;
+  }
+
+  .conversation-header__actions .icon-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .conversation-header__actions {
+    gap: 0;
+  }
+
+  .bubble {
+    max-width: 91%;
+  }
+
+  .person-card .button {
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .form-grid--two {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-card {
+    padding: 19px 14px;
+  }
+
+  .auth-tabs button {
+    padding: 0 8px;
+  }
+}
+
+@media (max-height: 620px) and (max-width: 880px) {
+  .mobile-brand {
+    min-height: 50px;
+    padding-top: 8px;
+  }
+
+  .list-header {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .list-header h1 {
+    font-size: 29px;
+  }
+
+  .list-header .eyebrow {
+    display: none;
+  }
+
+  .mobile-nav button {
+    min-height: 42px;
+  }
+
+  .mobile-nav {
+    padding-top: 3px;
+  }
+
+  .conversation-header {
+    min-height: 58px;
+  }
+}
+
+@media (max-height: 560px) {
+  .modal__header {
+    padding-top: 13px;
+    padding-bottom: 10px;
+  }
+
+  .modal__body {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .welcome-pane__mark {
+    margin-bottom: 14px;
+  }
+
+  .welcome-pane h1 {
+    font-size: 34px;
+  }
+
+  .welcome-pane__facts {
+    margin-top: 16px;
+    padding-top: 12px;
+  }
+}
