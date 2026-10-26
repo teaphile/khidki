@@ -61,13 +61,17 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     });
 
     expect(container.querySelector('.auth-story__stamp')).toBeNull();
+    expect(container.textContent).toContain('Khidki');
+    expect(container.textContent).not.toContain('Sotto');
     expect(container.textContent).not.toMatch(/2:00/);
-    expect(container.textContent).not.toMatch(/then gone/i);
+    expect(container.textContent).not.toMatch(/Seen \+/i);
+    expect(container.textContent).not.toContain('+');
     expect(container.textContent).not.toContain('—');
     expect(container.textContent).toMatch(/End-to-end encrypted/i);
+    expect(container.textContent).toMatch(/1m after seen|one minute/i);
   });
 
-  it('shows profile sticker picker and enforces 3-10 alphanumeric username input on sign up', async () => {
+  it('replaces preset stickers with an optional image-only DP control and enforces 3-10 alphanumeric username input on sign up', async () => {
     await act(async () => {
       root.render(
         <MemoryRouter initialEntries={['/']}>
@@ -89,9 +93,14 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
       signUpTab?.click();
     });
 
-    expect(container.querySelector('.avatar-picker')).not.toBeNull();
-    const stickerButtons = container.querySelectorAll('.avatar-picker__option');
-    expect(stickerButtons.length).toBeGreaterThanOrEqual(16);
+    expect(container.querySelector('.avatar-picker')).toBeNull();
+    expect(container.querySelector('.dp-control')).not.toBeNull();
+    const dpFileInput = container.querySelector(
+      '.dp-control input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(dpFileInput).not.toBeNull();
+    expect(dpFileInput?.accept).toBe('image/*');
+    expect(container.textContent).not.toContain('+');
 
     const usernameInput = container.querySelector(
       'input[autocomplete="username"]',

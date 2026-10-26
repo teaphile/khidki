@@ -1,75 +1,40 @@
 import { useEffect, useState } from 'react';
-import {
-  Check,
-  Copy,
-  Loader2,
-  LogOut,
-  Mail,
-  Monitor,
-  Moon,
-  RefreshCw,
-  ShieldCheck,
-  Sun,
-  Trash2,
-} from 'lucide-react';
+import { Check, Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { deleteAccount, updateProfile } from '../../lib/data';
-import { fingerprint, publicBundle } from '../../lib/crypto';
-import { supabase } from '../../lib/env';
 import { clearIdentity } from '../../lib/identityStore';
 import { displayNameSchema, firstIssue } from '../../lib/validation';
-import type { AvatarId, ThemeMode } from '../../types';
-import { Avatar } from '../ui/Avatar';
-import { AvatarPicker } from '../ui/AvatarPicker';
+import type { ThemeMode } from '../../types';
+import { DpUploadControl } from '../ui/DpUploadControl';
 import { Modal } from '../ui/Modal';
 
-const THEMES: Array<{ mode: ThemeMode; label: string; icon: typeof Sun }> = [
-  { mode: 'system', label: 'System', icon: Monitor },
-  { mode: 'light', label: 'Light', icon: Sun },
-  { mode: 'dark', label: 'Dark', icon: Moon },
-];
-
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { profile, identity, user, refreshProfile, signOut } = useAuth();
+  const { profile, user, refreshProfile, signOut } = useAuth();
   const { mode, setMode } = useTheme();
   const { toast } = useToast();
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
-  const [avatarId, setAvatarId] = useState<AvatarId>(profile?.avatar_id ?? 'initials');
+  const [dpUrl, setDpUrl] = useState<string | null>(profile?.avatar_url ?? null);
   const [saving, setSaving] = useState(false);
-  const [safetyNumber, setSafetyNumber] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const [deleteMode, setDeleteMode] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState('');
-  const [resetSent, setResetSent] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    setDisplayName(profile?.display_name ?? '');
-    setAvatarId(profile?.avatar_id ?? 'initials');
-    setDeleteMode(false);
-    setDeleteConfirm('');
-    setResetSent(false);
-  }, [open, profile?.avatar_id, profile?.display_name]);
+    if (open && profile) {
+      setDisplayName(profile.display_name);
+      setDpUrl(profile.avatar_url ?? null);
+      setConfirmDelete('');
+    }
+  }, [open, profile]);
 
-  useEffect(() => {
-    if (!open || !identity) return;
-    let active = true;
-    void fingerprint(publicBundle(identity)).then((value) => {
-      if (active) setSafetyNumber(value);
-    });
-    return () => {
-      active = false;
-    };
-  }, [identity, open]);
+  if (!profile) return null;
 
-  const hasProfileChanges = profile
-    ? displayName.trim() !== profile.display_name || avatarId !== profile.avatar_id
-    : false;
+  const hasProfileChanges =
+    displayName.trim() !== profile.display_name || (dpUrl ?? null) !== (profile.avatar_url ?? null);
 
-  const saveProfile = async () => {
-    if (!profile) return;
+  const handleSave = async () => {
     const parsed = displayNameSchema.safeParse(displayName);
     if (!parsed.success) {
       toast(firstIssue(parsed.error), 'error');
@@ -77,101 +42,93 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
     setSaving(true);
     try {
-      await updateProfile(profile.id, {
-        display_name: parsed.data,
-        avatar_id: avatarId,
-      });
+      await updateProfile(profile.id, { display_name: parsed.data, avatar_url: dpUrl });
       await refreshProfile();
-      toast('Profile updated.', 'success');
+      toast('Profile saved.', 'success');
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'Unable to update your profile.', 'error');
+      toast(error instanceof Error ? error.message : 'Unable to save profile.', 'error');
     } finally {
       setSaving(false);
     }
   };
 
-  const copyFingerprint = async () => {
-    if (!safetyNumber) return;
+  const handleSignOut = async () => {
+    setSigningOut(true);
     try {
-      await navigator.clipboard.writeText(safetyNumber.replace(/\s/g, ''));
-      toast('Device identity copied.', 'success');
-    } catch {
-      toast('Unable to copy. Select the number manually instead.', 'error');
+      await signOut();
+      onClose();
+    } finally {
+      setSigningOut(false);
     }
   };
 
-  const sendPasswordReset = async () => {
-    if (!supabase || !user?.email) return;
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      });
-      if (error) throw error;
-      setResetSent(true);
-      toast('Password reset link sent to your email.', 'success');
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'Unable to send the reset link.', 'error');
-    }
-  };
-
-  const removeAccount = async () => {
-    if (!profile || deleteConfirm !== profile.username) return;
+  const handleDelete = async () => {
+    if (confirmDelete.trim().toLowerCase() !== profile.username.toLowerCase()) return;
     setDeleting(true);
     try {
-      const deletingId = profile.id;
-      const deletingEmail = user?.email ?? null;
+      const userId = profile.id;
+      const email = user?.email ?? null;
       await deleteAccount();
-      await clearIdentity(deletingId, deletingEmail);
+      await clearIdentity(userId, email).catch(() => undefined);
       await signOut();
-      toast('Your account and device keys have been deleted.', 'info');
+      toast('Your account and all cloud data were permanently deleted.', 'info');
+      onClose();
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'Unable to delete your account.', 'error');
-    } finally {
+      toast(error instanceof Error ? error.message : 'Unable to delete account.', 'error');
       setDeleting(false);
     }
   };
+
+  const themes: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
+    { value: 'light', label: 'Light', icon: Sun },
+    { value: 'dark', label: 'Dark', icon: Moon },
+    { value: 'system', label: 'System', icon: Monitor },
+  ];
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Settings"
-      description="Your profile sticker, appearance, and encryption security."
+      title="Account settings"
+      description={`@${profile.username}${user?.email ? ` · ${user.email}` : ''}`}
       size="medium"
       footer={
-        <button type="button" className="button button--secondary" onClick={onClose}>
-          Close
-        </button>
+        <>
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={onClose}
+            disabled={saving || deleting}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={() => void handleSave()}
+            disabled={saving || deleting || !hasProfileChanges}
+          >
+            {saving ? (
+              <Loader2 className="spin" size={16} aria-hidden="true" />
+            ) : (
+              <Check size={16} aria-hidden="true" />
+            )}
+            Save profile
+          </button>
+        </>
       }
     >
-      <div className="settings-panel">
+      <div className="settings-stack">
         <section className="settings-section">
-          <div className="section-heading">
-            <h4>Profile & display sticker</h4>
-            <span>Username is permanent</span>
-          </div>
-
-          <div className="settings-avatar-preview">
-            <Avatar
-              name={displayName || profile?.display_name || 'You'}
-              seed={profile?.id ?? 'you'}
-              avatarId={avatarId}
-              size="lg"
-            />
-            <div>
-              <strong>{displayName || profile?.display_name}</strong>
-              <span>@{profile?.username}</span>
-            </div>
-          </div>
-
-          <AvatarPicker
-            value={avatarId}
-            onChange={setAvatarId}
-            name={displayName || profile?.display_name || 'You'}
-            seed={profile?.id ?? 'you'}
+          <DpUploadControl
+            name={displayName || profile.display_name}
+            seed={profile.id}
+            value={dpUrl}
+            onChange={setDpUrl}
+            disabled={saving || deleting}
           />
 
-          <div className="settings-row settings-row--profile">
+          <div className="settings-meta-grid">
             <label className="field">
               <span>Display name</span>
               <input
@@ -180,177 +137,86 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 maxLength={36}
               />
             </label>
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={() => void saveProfile()}
-              disabled={saving || !displayName.trim() || !hasProfileChanges}
-            >
-              {saving ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
-              ) : (
-                <Check size={16} aria-hidden="true" />
-              )}
-              Save
-            </button>
-          </div>
-
-          <div className="info-grid">
-            <div>
+            <label className="field">
               <span>Username</span>
-              <strong>@{profile?.username}</strong>
-            </div>
-            <div>
-              <span>Email</span>
-              <strong className="truncate">{user?.email}</strong>
-            </div>
+              <input value={`@${profile.username}`} readOnly aria-readonly="true" />
+            </label>
           </div>
         </section>
 
         <section className="settings-section">
-          <div className="section-heading">
-            <h4>Appearance</h4>
-            <span>Light, dark, or system</span>
-          </div>
-          <div className="theme-options" role="radiogroup" aria-label="Theme">
-            {THEMES.map((option) => {
-              const Icon = option.icon;
-              return (
-                <button
-                  type="button"
-                  key={option.mode}
-                  role="radio"
-                  aria-checked={mode === option.mode}
-                  className={mode === option.mode ? 'is-active' : ''}
-                  onClick={() => setMode(option.mode)}
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  {option.label}
-                </button>
-              );
-            })}
+          <span className="section-label">Appearance</span>
+          <div className="segmented" role="radiogroup" aria-label="Color theme">
+            {themes.map(({ value, label, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                className={mode === value ? 'is-active' : ''}
+                onClick={() => setMode(value)}
+              >
+                <Icon size={15} aria-hidden="true" />
+                {label}
+              </button>
+            ))}
           </div>
         </section>
 
-        <section className="settings-section">
-          <div className="section-heading">
-            <h4>Encryption identity</h4>
-            <span>Password-backed vault</span>
-          </div>
-          <div className="safety-number">
-            <div>
-              <span>Your identity fingerprint</span>
-              <strong>{safetyNumber ?? 'Generating...'}</strong>
-            </div>
-            <button
-              type="button"
-              className="icon-button icon-button--small"
-              onClick={() => void copyFingerprint()}
-              aria-label="Copy device identity"
-              disabled={!safetyNumber}
-            >
-              <Copy size={15} aria-hidden="true" />
-            </button>
-          </div>
-          <div className="info-note">
-            <ShieldCheck size={17} aria-hidden="true" />
-            <p>
-              Your private keys are sealed in this browser and backed up in an encrypted vault
-              locked with your password so unread messages stay readable even if you sign back in
-              days later.
+        <section className="settings-section settings-section--session">
+          <div className="settings-session-copy">
+            <span className="section-label">Log out</span>
+            <p className="muted-note">
+              Signs out on this device only. Your username, DP, and encrypted key vault remain safe
+              in cloud for your next sign in.
             </p>
           </div>
           <button
             type="button"
-            className="button button--ghost"
-            onClick={() => void sendPasswordReset()}
+            className="button button--secondary"
+            onClick={() => void handleSignOut()}
+            disabled={signingOut || deleting}
           >
-            {resetSent ? (
-              <RefreshCw size={16} aria-hidden="true" />
+            {signingOut ? (
+              <Loader2 className="spin" size={16} aria-hidden="true" />
             ) : (
-              <Mail size={16} aria-hidden="true" />
+              <LogOut size={16} aria-hidden="true" />
             )}
-            {resetSent ? 'Send another password link' : 'Send password reset link'}
+            Log out
           </button>
         </section>
 
-        <section className="settings-section">
-          <div className="section-heading">
-            <h4>Session</h4>
-          </div>
-          <div className="settings-row">
-            <div>
-              <strong>Sign out of this browser</strong>
-              <p>Decrypted messages are cleared from device memory immediately.</p>
-            </div>
+        <section className="settings-section settings-section--danger">
+          <span className="section-label">Delete account permanently</span>
+          <p className="muted-note">
+            Erases your login, username, DP, encrypted key vault, messages, call signals, and
+            conversations from cloud and this device. Type <strong>{profile.username}</strong> to
+            confirm.
+          </p>
+          <div className="settings-danger-row">
+            <input
+              className="danger-input"
+              value={confirmDelete}
+              onChange={(event) => setConfirmDelete(event.target.value)}
+              placeholder={profile.username}
+              aria-label={`Type ${profile.username} to confirm deletion`}
+            />
             <button
               type="button"
-              className="button button--secondary"
-              onClick={() => void signOut()}
+              className="button button--danger"
+              disabled={
+                deleting || confirmDelete.trim().toLowerCase() !== profile.username.toLowerCase()
+              }
+              onClick={() => void handleDelete()}
             >
-              <LogOut size={16} aria-hidden="true" /> Sign out
+              {deleting ? (
+                <Loader2 className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <Trash2 size={16} aria-hidden="true" />
+              )}
+              Delete account
             </button>
           </div>
-        </section>
-
-        <section className="settings-section settings-section--danger">
-          <div className="section-heading">
-            <h4>Delete account</h4>
-          </div>
-          {!deleteMode ? (
-            <div className="settings-row">
-              <div>
-                <strong>Permanently remove your account</strong>
-                <p>Profile, memberships, keys, and queued ciphertexts are erased.</p>
-              </div>
-              <button
-                type="button"
-                className="button button--ghost button--danger-text"
-                onClick={() => setDeleteMode(true)}
-              >
-                <Trash2 size={16} aria-hidden="true" /> Delete
-              </button>
-            </div>
-          ) : (
-            <div className="delete-account">
-              <p>
-                This cannot be undone. Type <strong>{profile?.username}</strong> to confirm.
-              </p>
-              <div className="delete-account__row">
-                <input
-                  value={deleteConfirm}
-                  onChange={(event) => setDeleteConfirm(event.target.value)}
-                  placeholder={profile?.username}
-                  autoComplete="off"
-                  aria-label="Type your username to confirm account deletion"
-                />
-                <button
-                  type="button"
-                  className="button button--danger"
-                  onClick={() => void removeAccount()}
-                  disabled={deleting || deleteConfirm !== profile?.username}
-                >
-                  {deleting ? (
-                    <Loader2 className="spin" size={16} aria-hidden="true" />
-                  ) : (
-                    <Trash2 size={16} aria-hidden="true" />
-                  )}
-                  Delete forever
-                </button>
-                <button
-                  type="button"
-                  className="button button--ghost"
-                  onClick={() => {
-                    setDeleteMode(false);
-                    setDeleteConfirm('');
-                  }}
-                  disabled={deleting}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
         </section>
       </div>
     </Modal>

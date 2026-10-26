@@ -50,9 +50,9 @@ export function ResetPasswordPage() {
   return (
     <div className="auth-shell auth-shell--centered">
       <header className="auth-topbar">
-        <a className="brand brand--link" href="/" aria-label="Sotto home">
+        <a className="brand brand--link" href="/" aria-label="Khidki home">
           <LogoMark />
-          <span>Sotto</span>
+          <span>Khidki</span>
         </a>
         <ThemeToggle />
       </header>

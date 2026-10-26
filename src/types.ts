@@ -28,33 +28,11 @@ export type Identity = {
   };
 };
 
-export const AVATAR_IDS = [
-  'initials',
-  'fox',
-  'owl',
-  'cat',
-  'wolf',
-  'panda',
-  'crown',
-  'bolt',
-  'flame',
-  'moon',
-  'star',
-  'lotus',
-  'gem',
-  'wave',
-  'shield',
-  'music',
-  'rocket',
-] as const;
-
-export type AvatarId = (typeof AVATAR_IDS)[number];
-
 export type Profile = {
   id: string;
   username: string;
   display_name: string;
-  avatar_id: AvatarId;
+  avatar_url: string | null;
   public_key: PublicKeyBundle | null;
   key_vault: KeyVault | null;
   created_at: string;
@@ -64,7 +42,7 @@ export type PeopleResult = {
   id: string;
   username: string;
   display_name: string;
-  avatar_id: AvatarId;
+  avatar_url: string | null;
   public_key: PublicKeyBundle | null;
 };
 
@@ -76,7 +54,7 @@ export type ConversationMember = {
   userId: string;
   username: string;
   displayName: string;
-  avatarId: AvatarId;
+  avatarUrl: string | null;
   publicKey: PublicKeyBundle | null;
   role: MemberRole;
 };
@@ -115,6 +93,7 @@ export type ChatMessage = {
   createdAt: number;
   seenAt: number | null;
   expiresAt: number | null;
+  seenBy?: string[];
   mine: boolean;
   status: MessageStatus;
 };
@@ -132,6 +111,7 @@ export type StoredMessageRow = {
   created_at: string;
   seen_at: string | null;
   expires_at: string | null;
+  seen_by?: string[];
 };
 
 export type CallSignalRow = {
@@ -158,7 +138,7 @@ export type CallState = {
   conversationId: string | null;
   peerId: string | null;
   peerName: string;
-  peerAvatarId: AvatarId;
+  peerAvatarUrl: string | null;
   video: boolean;
   startedAt: number | null;
   error: string | null;

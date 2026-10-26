@@ -65,7 +65,7 @@ export function MobileNav({
             <Avatar
               name={profile.display_name}
               seed={profile.id}
-              avatarId={profile.avatar_id}
+              dpUrl={profile.avatar_url}
               size="sm"
             />
           ) : null}

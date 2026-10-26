@@ -1,58 +1,44 @@
-import { LockKeyhole, Server, ShieldCheck } from 'lucide-react';
-import { ThemeToggle } from './ui/ThemeToggle';
 import { LogoMark } from './ui/LogoMark';
+import { ThemeToggle } from './ui/ThemeToggle';
 
 export function SetupNotice() {
   return (
     <div className="setup-shell">
-      <header className="setup-topbar">
-        <a className="brand brand--link" href="/" aria-label="Sotto home">
+      <header className="auth-topbar">
+        <div className="brand">
           <LogoMark />
-          <span>Sotto</span>
-        </a>
+          <span>Khidki</span>
+        </div>
         <ThemeToggle />
       </header>
 
       <main className="setup-card">
-        <span className="eyebrow">Configuration required</span>
-        <h1>Connect your Supabase project.</h1>
-        <p className="setup-lead">
-          Sotto is ready, but this deployment does not have its Supabase URL and public key yet. Add
-          both environment variables in Vercel, then redeploy.
+        <span className="eyebrow">Environment setup required</span>
+        <h1>Connect Supabase to start Khidki</h1>
+        <p>
+          Khidki uses Supabase for verified email authentication, username lookup, and real-time
+          encrypted delivery. Add your project URL and public key to <code>.env.local</code>, then
+          restart the dev server.
         </p>
 
-        <div className="setup-code" aria-label="Required environment variables">
-          <code>VITE_SUPABASE_URL=https://your-project.supabase.co</code>
-          <code>VITE_SUPABASE_ANON_KEY=your-public-anon-key</code>
-        </div>
+        <pre className="code-block" aria-label="Environment variables example">
+          {`VITE_SUPABASE_URL=https://your-project-id.supabase.co
+VITE_SUPABASE_ANON_KEY=your-public-anon-key`}
+        </pre>
 
-        <div className="setup-steps">
-          <div className="setup-step">
-            <Server size={19} aria-hidden="true" />
-            <div>
-              <strong>Run the database migration</strong>
-              <p>Apply the SQL file in the Supabase SQL editor before the first signup.</p>
-            </div>
-          </div>
-          <div className="setup-step">
-            <LockKeyhole size={19} aria-hidden="true" />
-            <div>
-              <strong>Enable email confirmation</strong>
-              <p>Turn off phone signup and require a verified email address for every account.</p>
-            </div>
-          </div>
-          <div className="setup-step">
-            <ShieldCheck size={19} aria-hidden="true" />
-            <div>
-              <strong>Keep the service role key private</strong>
-              <p>Only the public anon key belongs in this browser application.</p>
-            </div>
-          </div>
-        </div>
-
-        <p className="setup-footnote">
-          Full setup instructions are in <code>README.md</code> and <code>supabase/README.md</code>.
-        </p>
+        <ol className="setup-steps">
+          <li>
+            Create a free project at <strong>supabase.com</strong> and open the SQL Editor.
+          </li>
+          <li>
+            Run the migrations inside <code>supabase/migrations/</code> to create profiles,
+            conversations, encrypted message storage, and Row Level Security policies.
+          </li>
+          <li>
+            Copy your Project URL and anon public key from <strong>Project Settings → API</strong>{' '}
+            into <code>.env.local</code> (or into Vercel Environment Variables when deploying).
+          </li>
+        </ol>
       </main>
     </div>
   );

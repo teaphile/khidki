@@ -155,6 +155,7 @@ function ChatSession({
   const syncQueuedRef = useRef(false);
   const markingSeenRef = useRef<Set<string>>(new Set());
   const lastServerPurgeRef = useRef(0);
+  const purgeTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     setRealtimeSelfUserId(profile.id);
@@ -296,12 +297,14 @@ function ChatSession({
         return null;
       }
 
+      const seenBy = Array.isArray(row.seen_by) ? row.seen_by : [];
       const existing = decryptedRef.current.get(row.id);
       if (existing) {
         const updated: ChatMessage = {
           ...existing,
           seenAt,
           expiresAt,
+          seenBy,
           status: seenAt !== null ? 'seen' : 'sent',
         };
         decryptedRef.current.set(row.id, updated);
@@ -343,6 +346,7 @@ function ChatSession({
           createdAt,
           seenAt,
           expiresAt,
+          seenBy,
           mine: row.sender_id === profile.id,
           status: seenAt !== null ? 'seen' : 'sent',
         };
@@ -367,6 +371,7 @@ function ChatSession({
           createdAt,
           seenAt,
           expiresAt,
+          seenBy,
           mine: row.sender_id === profile.id,
           status: seenAt !== null ? 'seen' : 'sent',
         };
@@ -496,13 +501,25 @@ function ChatSession({
           const receipt = byId.get(msg.id);
           if (!receipt) return msg;
           const { seenAt, expiresAt } = resolveSeenTimers(receipt.seen_at, receipt.expires_at);
-          if (msg.seenAt === seenAt && msg.expiresAt === expiresAt) return msg;
+          const nextSeenBy = Array.isArray(receipt.seen_by)
+            ? receipt.seen_by
+            : msg.seenBy?.includes(profile.id)
+              ? msg.seenBy
+              : [...(msg.seenBy ?? []), profile.id];
+          if (
+            msg.seenAt === seenAt &&
+            msg.expiresAt === expiresAt &&
+            msg.seenBy?.length === nextSeenBy.length
+          ) {
+            return msg;
+          }
           changed = true;
           const updated: ChatMessage = {
             ...msg,
             seenAt,
             expiresAt,
-            status: 'seen',
+            seenBy: nextSeenBy,
+            status: seenAt !== null ? 'seen' : msg.status,
           };
           decryptedRef.current.set(msg.id, updated);
           return updated;
@@ -510,7 +527,7 @@ function ChatSession({
         return changed ? { ...current, [conversationId]: next } : current;
       });
     },
-    [updateMessages],
+    [profile.id, updateMessages],
   );
 
   const notifyPeers = useCallback(
@@ -527,17 +544,25 @@ function ChatSession({
     [profile.id],
   );
 
-  // Automatically mark peer messages as SEEN (starting the 2-minute countdown)
-  // ONLY when the recipient actually views the conversation in a visible tab.
+  // Mark peer messages as SEEN (starting the 1-minute countdown) ONLY when the
+  // user explicitly opens that individual conversation in a visible tab.
   const activeMessages = activeId ? (messages[activeId] ?? []) : [];
-  const hasUnseenInActive = activeMessages.some((msg) => !msg.mine && msg.seenAt === null);
+  const hasUnseenInActive = activeMessages.some(
+    (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+  );
 
   const triggerMarkSeen = useCallback(
     async (conversationId: string) => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (markingSeenRef.current.has(conversationId)) return;
       const list = messagesRef.current[conversationId] ?? [];
-      if (!list.some((msg) => !msg.mine && msg.seenAt === null)) return;
+      if (
+        !list.some(
+          (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+        )
+      ) {
+        return;
+      }
 
       markingSeenRef.current.add(conversationId);
       try {
@@ -563,7 +588,7 @@ function ChatSession({
         markingSeenRef.current.delete(conversationId);
       }
     },
-    [applySeenReceipts, broadcastConversationEvent, findConversation, notifyPeers],
+    [applySeenReceipts, broadcastConversationEvent, findConversation, notifyPeers, profile.id],
   );
 
   useEffect(() => {
@@ -1068,7 +1093,7 @@ function ChatSession({
     };
   }, []);
 
-  // Automatic 1-second sweep for messages whose 2-minute post-seen timer reached 0:00.
+  // Automatic 1-second sweep for messages whose 1-minute post-seen timer reached 0:00.
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
@@ -1094,12 +1119,27 @@ function ChatSession({
 
       for (const url of revoked) URL.revokeObjectURL(url);
 
-      if (expiredAny && now - lastServerPurgeRef.current > 4_000) {
-        lastServerPurgeRef.current = now;
-        void purgeExpiredMessages();
+      if (expiredAny) {
+        const elapsed = now - lastServerPurgeRef.current;
+        if (elapsed >= 1_500) {
+          lastServerPurgeRef.current = now;
+          void purgeExpiredMessages();
+        } else if (purgeTimeoutRef.current === null) {
+          purgeTimeoutRef.current = window.setTimeout(() => {
+            purgeTimeoutRef.current = null;
+            lastServerPurgeRef.current = Date.now();
+            void purgeExpiredMessages();
+          }, 1_500 - elapsed);
+        }
       }
     }, 1_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (purgeTimeoutRef.current !== null) {
+        window.clearTimeout(purgeTimeoutRef.current);
+        purgeTimeoutRef.current = null;
+      }
+    };
   }, [updateMessages]);
 
   const activeConversation = useMemo(
@@ -1123,11 +1163,13 @@ function ChatSession({
   const unread = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const [convId, list] of Object.entries(messages)) {
-      const unseenCount = list.filter((msg) => !msg.mine && msg.seenAt === null).length;
+      const unseenCount = list.filter(
+        (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+      ).length;
       if (unseenCount > 0) counts[convId] = unseenCount;
     }
     return counts;
-  }, [messages]);
+  }, [messages, profile.id]);
 
   const totalUnreadChats = useMemo(
     () => activeChats.reduce((sum, conv) => sum + (unread[conv.id] ?? 0), 0),

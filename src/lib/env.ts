@@ -21,7 +21,7 @@ export const supabase: SupabaseClient | null = supabaseConfigured
         params: { eventsPerSecond: 20 },
       },
       global: {
-        headers: { 'x-client-info': 'sotto-web/1.0.0' },
+        headers: { 'x-client-info': 'khidki-web/1.0.0' },
       },
     })
   : null;

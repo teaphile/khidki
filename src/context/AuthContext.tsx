@@ -85,11 +85,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!supabase) return;
 
     let active = true;
+    const scrubAuthParamsFromUrl = () => {
+      if (typeof window === 'undefined') return;
+      const search = window.location.search;
+      const hash = window.location.hash;
+      if (
+        search.includes('code=') ||
+        search.includes('token_hash=') ||
+        hash.includes('access_token=') ||
+        hash.includes('refresh_token=')
+      ) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    };
+
     void supabase.auth
       .getSession()
       .then(({ data, error }) => {
         if (!active) return;
         if (error) setProfileError(friendlyAccountError(error));
+        if (data.session) scrubAuthParamsFromUrl();
         setSession(data.session);
       })
       .catch((error: unknown) => {
@@ -101,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
+      if (nextSession) scrubAuthParamsFromUrl();
       setSession((previous) => {
         if (previous?.user?.id && previous.user.id !== nextSession?.user?.id) {
           setProfile(null);

@@ -35,7 +35,7 @@ export async function blockExternalRequests(page: Page): Promise<void> {
 export async function setStoredTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
   await page.addInitScript((value) => {
     try {
-      localStorage.setItem('sotto.theme', value);
+      localStorage.setItem('khidki.theme', value);
     } catch {
       // Storage can be unavailable; the default theme still renders.
     }

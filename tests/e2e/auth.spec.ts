@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 test('renders an email-only sign-in screen with no phone fields', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveAttribute('type', 'email');
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
   await expect(page.locator('input[type="tel"]')).toHaveCount(0);
@@ -19,7 +19,7 @@ test('sign-up shows the required identity fields and password rules', async ({ p
   await page.goto('/');
   await page.getByRole('tab', { name: 'Sign up' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Start a private conversation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create your Khidki profile' })).toBeVisible();
   await expect(page.getByLabel('Display name')).toBeVisible();
   await expect(page.getByLabel('Username')).toBeVisible();
   await expect(page.getByLabel('Confirm password')).toBeVisible();
@@ -105,7 +105,7 @@ test('forgot-password mode asks only for an email address', async ({ page }) => 
   await expect(page.getByRole('button', { name: 'Send reset link' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Back to sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
 });
 
 test('persists the theme across reloads', async ({ page }) => {
@@ -133,7 +133,7 @@ test('redirects unknown routes to the sign-in screen', async ({ page }) => {
   await page.goto('/not-a-real-route');
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
 });
 
 test('loads without page errors or unhandled console errors', async ({ page }) => {
@@ -144,7 +144,7 @@ test('loads without page errors or unhandled console errors', async ({ page }) =
   });
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
   await page.getByRole('tab', { name: 'Sign up' }).click();
   await page.getByRole('tab', { name: 'Sign in' }).click();
 

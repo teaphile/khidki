@@ -22,9 +22,9 @@ export function Workspace() {
   const totalAlerts = totalUnreadChats + incomingRequestCount;
 
   useEffect(() => {
-    document.title = totalAlerts > 0 ? `(${totalAlerts}) Sotto` : 'Sotto | Private Messenger';
+    document.title = totalAlerts > 0 ? `(${totalAlerts}) Khidki` : 'Khidki | Private Messenger';
     return () => {
-      document.title = 'Sotto | Private Messenger';
+      document.title = 'Khidki | Private Messenger';
     };
   }, [totalAlerts]);
 

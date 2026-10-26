@@ -12,7 +12,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import {
-  conversationAvatarId,
+  conversationDpUrl,
   conversationHandle,
   conversationSeed,
   conversationTitle,
@@ -94,7 +94,7 @@ export function ConversationList({
               : 'Offline'}
         </span>
         <span className="panel__ttl">
-          <Clock3 size={13} aria-hidden="true" /> Seen + 2m auto-clean
+          <Clock3 size={13} aria-hidden="true" /> Clears 1m after seen
         </span>
       </div>
 
@@ -196,7 +196,7 @@ export function ConversationList({
                     <Avatar
                       name={title}
                       seed={conversationSeed(conversation, myId)}
-                      avatarId={conversationAvatarId(conversation, myId)}
+                      dpUrl={conversationDpUrl(conversation, myId)}
                       group={conversation.kind === 'group'}
                     />
                     <span className="chat-row__body">

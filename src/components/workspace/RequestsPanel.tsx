@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import {
-  conversationAvatarId,
+  conversationDpUrl,
   conversationHandle,
   conversationSeed,
   conversationTitle,
@@ -101,7 +101,7 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
                     <Avatar
                       name={title}
                       seed={conversationSeed(conversation, myId)}
-                      avatarId={conversationAvatarId(conversation, myId)}
+                      dpUrl={conversationDpUrl(conversation, myId)}
                     />
                     <span className="request-card__info">
                       <span className="request-card__top">

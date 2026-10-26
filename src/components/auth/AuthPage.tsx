@@ -28,9 +28,7 @@ import {
   signInEmailSchema,
   usernameSchema,
 } from '../../lib/validation';
-import type { AvatarId } from '../../types';
-import { Avatar } from '../ui/Avatar';
-import { AvatarPicker } from '../ui/AvatarPicker';
+import { DpUploadControl } from '../ui/DpUploadControl';
 import { LogoMark } from '../ui/LogoMark';
 import { ThemeToggle } from '../ui/ThemeToggle';
 
@@ -50,15 +48,18 @@ function safeStartupAuthError(search: string, hash: string): string | null {
   if (!code && !error && !rawDescription) return null;
 
   if (code.includes('otp_expired') || rawDescription.includes('expired')) {
-    return 'That verification or recovery link has expired. Request a fresh link and try again.';
+    return 'That verification or reset link has expired. Sign in if already verified, or request a fresh link.';
   }
-  if (code.includes('flow_state') || rawDescription.includes('invalid')) {
-    return 'That authentication link is no longer valid. Please sign in or request a new link.';
+  if (code.includes('flow_state')) {
+    return 'Email link opened in another browser. If you confirmed your email, sign in directly below.';
+  }
+  if (rawDescription.includes('invalid')) {
+    return 'That email link was already used or is no longer active. Sign in directly or request a fresh link.';
   }
   if (error === 'access_denied') {
     return 'Email verification could not be completed. Request a fresh link if needed.';
   }
-  return 'Authentication could not be completed. Please try signing in again.';
+  return 'Authentication could not be completed. Please sign in below.';
 }
 
 function friendlyAuthError(error: unknown): string {
@@ -99,7 +100,7 @@ export function AuthPage() {
   const [mode, setMode] = useState<Mode>('signin');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  const [avatarId, setAvatarId] = useState<AvatarId>('fox');
+  const [dpUrl, setDpUrl] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -119,8 +120,9 @@ export function AuthPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!startupError) return;
-    window.history.replaceState({}, document.title, window.location.pathname);
+    if (startupError || window.location.hash.includes('error')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, [startupError]);
 
   useEffect(() => {
@@ -151,7 +153,7 @@ export function AuthPage() {
 
   const passwordRules = useMemo(
     () => [
-      { label: '10+ characters', valid: password.length >= 10 },
+      { label: '10 or more characters', valid: password.length >= 10 },
       { label: 'One letter', valid: /[A-Za-z]/.test(password) },
       { label: 'One number', valid: /[0-9]/.test(password) },
     ],
@@ -217,7 +219,7 @@ export function AuthPage() {
         data: {
           username: parsedUsername.data,
           display_name: parsedName.data,
-          avatar_id: avatarId,
+          avatar_url: dpUrl,
           public_key: bundle,
           key_vault: vault,
         },
@@ -225,7 +227,6 @@ export function AuthPage() {
     });
     if (error) throw error;
 
-    // Supabase returns an empty identities array if the email already exists while obfuscating enumeration
     if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
       throw new Error('An account with that email already exists. Sign in instead.');
     }
@@ -297,9 +298,9 @@ export function AuthPage() {
   return (
     <div className="auth-shell">
       <header className="auth-topbar">
-        <a className="brand brand--link" href="/" aria-label="Sotto home">
+        <a className="brand brand--link" href="/" aria-label="Khidki home">
           <LogoMark />
-          <span>Sotto</span>
+          <span>Khidki</span>
         </a>
         <div className="auth-topbar__actions">
           <span className="privacy-pill">
@@ -315,46 +316,47 @@ export function AuthPage() {
           <ShieldCheck size={13} aria-hidden="true" /> Verified inbox only
         </span>
         <span className="auth-chip">
-          <Clock3 size={13} aria-hidden="true" /> Seen + 2m self-clean
+          <Clock3 size={13} aria-hidden="true" /> Clears 1m after seen
         </span>
         <span className="auth-chip">
-          <Lock size={13} aria-hidden="true" /> Zero message edits
+          <Lock size={13} aria-hidden="true" /> No message edits
         </span>
       </div>
 
       <main className="auth-stage">
-        <section className="auth-story" aria-label="About Sotto">
+        <section className="auth-story" aria-label="About Khidki">
           <div className="auth-story__content">
-            <span className="eyebrow">Private conversations</span>
+            <span className="eyebrow">Private messenger</span>
             <h1>
-              Speak freely.
+              Open your window.
               <br />
-              Self-cleaning after seen.
+              Nothing lingers behind.
             </h1>
             <p>
-              Messages stay encrypted while your contact is offline, then automatically erase two
-              minutes after being seen. Nothing can be edited or tampered with.
+              Messages stay sealed while you are offline and only start their one minute timer when
+              you open that person’s chat. Once read, texts, photos, videos, and files clear
+              automatically.
             </p>
             <ul className="auth-points">
               <li>
                 <Clock3 size={19} aria-hidden="true" />
                 <div>
-                  <strong>Seen plus two minutes</strong>
-                  <span>Unread messages wait safely across days and self-clean once read.</span>
+                  <strong>Clears one minute after seen</strong>
+                  <span>Unread chats wait safely until you open each conversation yourself.</span>
                 </div>
               </li>
               <li>
                 <ShieldCheck size={19} aria-hidden="true" />
                 <div>
-                  <strong>Browser-encrypted keys</strong>
-                  <span>Messages, photos, and calls stay sealed end to end.</span>
+                  <strong>Sealed in your browser</strong>
+                  <span>Texts, media, files, and calls stay encrypted end to end.</span>
                 </div>
               </li>
               <li>
                 <AtSign size={19} aria-hidden="true" />
                 <div>
-                  <strong>Verified real accounts</strong>
-                  <span>Temp mail is blocked. Message requests protect your inbox.</span>
+                  <strong>Verified accounts only</strong>
+                  <span>Disposable mail is blocked and new contacts arrive as requests.</span>
                 </div>
               </li>
             </ul>
@@ -371,8 +373,8 @@ export function AuthPage() {
                 <span className="eyebrow">Verify your email</span>
                 <h2>Check your inbox</h2>
                 <p>
-                  We sent a verification link to <strong>{email}</strong>. Tap the link in your
-                  email to activate <strong>@{username}</strong>, then sign in here.
+                  We sent a verification link to <strong>{email}</strong>. Open the link to activate{' '}
+                  <strong>@{username}</strong>, then sign in here.
                 </p>
                 {notice ? <p className="inline-notice">{notice}</p> : null}
                 {formError ? (
@@ -428,9 +430,9 @@ export function AuthPage() {
                   </span>
                   <h2>
                     {mode === 'signin'
-                      ? 'Sign in to Sotto'
+                      ? 'Sign in to Khidki'
                       : mode === 'signup'
-                        ? 'Create your private profile'
+                        ? 'Create your Khidki profile'
                         : 'Forgot your password?'}
                   </h2>
                   <p>
@@ -468,26 +470,13 @@ export function AuthPage() {
                 <form className="auth-form" onSubmit={onSubmit} noValidate>
                   {mode === 'signup' ? (
                     <>
-                      <div className="signup-avatar-block">
-                        <div className="signup-avatar-block__head">
-                          <Avatar
-                            name={displayName || 'You'}
-                            seed={username || 'sotto'}
-                            avatarId={avatarId}
-                            size="md"
-                          />
-                          <div>
-                            <strong>Profile sticker</strong>
-                            <span>Pick a lightweight symbol for your display picture</span>
-                          </div>
-                        </div>
-                        <AvatarPicker
-                          value={avatarId}
-                          onChange={setAvatarId}
-                          name={displayName}
-                          seed={username || 'sotto'}
-                        />
-                      </div>
+                      <DpUploadControl
+                        name={displayName || 'You'}
+                        seed={username || 'khidki'}
+                        value={dpUrl}
+                        onChange={setDpUrl}
+                        disabled={busy}
+                      />
 
                       <div className="form-grid form-grid--two">
                         <label className="field">
@@ -527,7 +516,7 @@ export function AuthPage() {
                               ? 'Username available'
                               : usernameState === 'taken'
                                 ? 'Already taken'
-                                : '3 to 10 chars, a-z and 0-9 only'}
+                                : '3 to 10 chars, a to z and 0 to 9'}
                           </small>
                         </label>
                       </div>
@@ -664,7 +653,7 @@ export function AuthPage() {
                 <p className="auth-card__footnote">
                   {mode === 'signup'
                     ? 'Email verification is required before first sign in. No phone number needed.'
-                    : 'Messages stay encrypted until seen and erase automatically two minutes after reading.'}
+                    : 'Chats stay closed when you sign in so timers only start when you open a conversation.'}
                 </p>
               </>
             )}
@@ -673,9 +662,9 @@ export function AuthPage() {
       </main>
 
       <footer className="auth-footer">
-        <span>Sotto · Private conversations</span>
+        <span>Khidki · Private messenger</span>
         <span className={`theme-note theme-note--${resolved}`}>
-          <Lock size={14} aria-hidden="true" /> End-to-end encrypted · Seen + 2m auto-clean
+          <Lock size={14} aria-hidden="true" /> Encrypted end to end · Clears 1m after seen
         </span>
       </footer>
     </div>

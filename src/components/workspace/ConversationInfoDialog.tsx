@@ -19,7 +19,7 @@ import { useToast } from '../../context/ToastContext';
 import { searchPeople } from '../../lib/data';
 import { publicBundle, safetyNumberForPair } from '../../lib/crypto';
 import {
-  conversationAvatarId,
+  conversationDpUrl,
   conversationHandle,
   conversationSeed,
   conversationTitle,
@@ -207,7 +207,7 @@ export function ConversationInfoDialog({
           <Avatar
             name={title}
             seed={conversationSeed(conversation, myId)}
-            avatarId={conversationAvatarId(conversation, myId)}
+            dpUrl={conversationDpUrl(conversation, myId)}
             group={conversation.kind === 'group'}
             size="large"
           />
@@ -311,7 +311,7 @@ export function ConversationInfoDialog({
                   <Avatar
                     name={member.displayName}
                     seed={member.userId}
-                    avatarId={member.avatarId}
+                    dpUrl={member.avatarUrl}
                     size="small"
                   />
                   <div>
@@ -381,7 +381,7 @@ export function ConversationInfoDialog({
                         <Avatar
                           name={person.display_name}
                           seed={person.id}
-                          avatarId={person.avatar_id}
+                          dpUrl={person.avatar_url}
                           size="small"
                         />
                         <span>
@@ -404,7 +404,7 @@ export function ConversationInfoDialog({
               <ShieldCheck size={17} aria-hidden="true" />
               <p>
                 Adding or removing a member rotates the group key automatically. Group messages
-                self-clean two minutes after being seen.
+                clear automatically one minute after being seen.
               </p>
             </div>
 

@@ -1,44 +1,49 @@
 import type { CSSProperties } from 'react';
-import type { AvatarId } from '../../types';
-import { getAvatarPreset } from '../../lib/avatars';
+import { Users } from 'lucide-react';
+import { isValidDpDataUrl } from '../../lib/dp';
 import { avatarHue, initials } from '../../lib/format';
 
-export function Avatar({
-  name,
-  seed,
-  avatarId = 'initials',
-  size = 'md',
-  group = false,
-}: {
-  name: string;
-  seed: string;
-  avatarId?: AvatarId;
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'small' | 'large';
-  group?: boolean;
-}) {
-  const normalizedSize = size === 'small' ? 'sm' : size === 'large' ? 'lg' : size;
-  const hue = avatarHue(seed || name);
-  const preset = !group && avatarId && avatarId !== 'initials' ? getAvatarPreset(avatarId) : null;
+export type AvatarSize = 'xs' | 'sm' | 'small' | 'md' | 'lg' | 'large' | 'xl';
 
-  const style = preset
-    ? ({
-        '--avatar-hue': hue,
-        background: `linear-gradient(145deg, ${preset.bgStart}, ${preset.bgEnd})`,
-        color: preset.ink,
-      } as CSSProperties)
-    : ({ '--avatar-hue': hue } as CSSProperties);
+type Props = {
+  name: string;
+  seed?: string;
+  dpUrl?: string | null;
+  group?: boolean;
+  size?: AvatarSize;
+  online?: boolean;
+};
+
+function normalizeSize(size: AvatarSize): 'xs' | 'sm' | 'md' | 'lg' | 'xl' {
+  if (size === 'small') return 'sm';
+  if (size === 'large') return 'lg';
+  return size;
+}
+
+export function Avatar({ name, seed, dpUrl, group = false, size = 'md', online }: Props) {
+  const normalized = normalizeSize(size);
+  const hue = avatarHue(seed ?? name);
+  const style = { '--avatar-hue': String(hue) } as CSSProperties;
+  const hasDp = !group && isValidDpDataUrl(dpUrl);
+  const iconSize =
+    normalized === 'xl' ? 28 : normalized === 'lg' ? 22 : normalized === 'sm' ? 15 : 18;
 
   return (
     <span
-      className={`avatar avatar--${normalizedSize}${group ? ' avatar--group' : ''}${preset ? ' avatar--sticker' : ''}`}
+      className={`avatar avatar--${normalized}${hasDp ? ' avatar--photo' : ''}${group ? ' avatar--group' : ''}`}
       style={style}
       aria-hidden="true"
     >
-      {preset ? (
-        <span className="avatar__symbol">{preset.symbol}</span>
+      {hasDp ? (
+        <img className="avatar__image" src={dpUrl} alt="" decoding="async" draggable={false} />
+      ) : group ? (
+        <Users className="avatar__group-icon" size={iconSize} strokeWidth={2.1} />
       ) : (
-        <span>{initials(name)}</span>
+        <span className="avatar__initials">{initials(name)}</span>
       )}
+      {online !== undefined ? (
+        <span className={`avatar__dot ${online ? 'is-online' : 'is-offline'}`} />
+      ) : null}
     </span>
   );
 }

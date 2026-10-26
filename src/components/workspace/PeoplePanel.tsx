@@ -136,7 +136,7 @@ export function PeoplePanel({ onConversationReady }: { onConversationReady: () =
               const existing = existingByPeerId.get(person.id);
               return (
                 <li key={person.id} className="person-row">
-                  <Avatar name={person.display_name} seed={person.id} avatarId={person.avatar_id} />
+                  <Avatar name={person.display_name} seed={person.id} dpUrl={person.avatar_url} />
                   <div className="person-row__meta">
                     <strong className="truncate">{person.display_name}</strong>
                     <span className="truncate">@{person.username}</span>

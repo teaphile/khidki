@@ -19,7 +19,7 @@ import { useCall } from '../../context/CallContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import {
-  conversationAvatarId,
+  conversationDpUrl,
   conversationHandle,
   conversationSeed,
   conversationTitle,
@@ -67,11 +67,11 @@ export function ConversationView({
     return (
       <section className="stage-empty" aria-label="No conversation selected">
         <LogoMark size={46} />
-        <span className="eyebrow">Ready when you are</span>
+        <span className="eyebrow">Chats stay closed on login</span>
         <h2>Select a chat or find someone by username</h2>
         <p>
-          Messages stay encrypted while your contact is offline and automatically self-clean two
-          minutes after being seen. Nothing can be edited or deleted manually.
+          Unread messages wait safely across logouts until you open that person’s chat. Once seen,
+          texts, photos, videos, and files clear automatically after 1 minute.
         </p>
         <div className="stage-empty__actions">
           <button type="button" className="button button--primary" onClick={onOpenPeople}>
@@ -138,7 +138,7 @@ export function ConversationView({
           <Avatar
             name={title}
             seed={conversationSeed(activeConversation, myId)}
-            avatarId={conversationAvatarId(activeConversation, myId)}
+            dpUrl={conversationDpUrl(activeConversation, myId)}
             group={activeConversation.kind === 'group'}
           />
           <span className="conversation__titles">
@@ -191,8 +191,8 @@ export function ConversationView({
         <div className="ephemeral-banner">
           <Clock3 size={15} aria-hidden="true" />
           <span>
-            Unseen messages wait safely across logouts. Once seen, every message self-cleans in 2
-            minutes and cannot be edited or deleted manually.
+            Unseen messages wait safely across logouts. Once seen, every text, photo, video, and
+            file clears automatically in 1 minute with no manual edits.
           </span>
         </div>
 

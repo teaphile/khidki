@@ -169,7 +169,7 @@ export function NewGroupDialog({
                 <Avatar
                   name={person.display_name}
                   seed={person.id}
-                  avatarId={person.avatar_id}
+                  dpUrl={person.avatar_url}
                   size="small"
                 />
                 <span>{person.display_name}</span>
@@ -199,7 +199,7 @@ export function NewGroupDialog({
                 <Avatar
                   name={person.display_name}
                   seed={person.id}
-                  avatarId={person.avatar_id}
+                  dpUrl={person.avatar_url}
                   size="small"
                 />
                 <span>

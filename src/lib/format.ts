@@ -1,4 +1,4 @@
-import type { AvatarId, Conversation } from '../types';
+import type { Conversation } from '../types';
 
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -38,9 +38,9 @@ export function conversationSeed(conversation: Conversation, myId: string): stri
   return dmPeer(conversation, myId)?.userId ?? conversation.id;
 }
 
-export function conversationAvatarId(conversation: Conversation, myId: string): AvatarId {
-  if (conversation.kind === 'group') return 'initials';
-  return dmPeer(conversation, myId)?.avatarId ?? 'initials';
+export function conversationDpUrl(conversation: Conversation, myId: string): string | null {
+  if (conversation.kind === 'group') return null;
+  return dmPeer(conversation, myId)?.avatarUrl ?? null;
 }
 
 export function formatClock(timestamp: number): string {

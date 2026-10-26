@@ -134,7 +134,7 @@ export function Composer({ allowAttachments = true }: { allowAttachments?: boole
           )}
           <div className="composer__file-meta">
             <strong className="truncate">{file.name}</strong>
-            <span>{formatBytes(file.size)} · Encrypted · Self-cleans 2m after seen</span>
+            <span>{formatBytes(file.size)} · Encrypted · Clears 1m after seen</span>
           </div>
           <button
             type="button"

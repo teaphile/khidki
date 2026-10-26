@@ -93,6 +93,7 @@ const RESERVED_USERNAMES = new Set([
   'admin',
   'api',
   'help',
+  'khidki',
   'mail',
   'mod',
   'null',

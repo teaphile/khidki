@@ -1,5 +1,4 @@
 import type {
-  AvatarId,
   CallSignalRow,
   Conversation,
   ConversationMember,
@@ -10,8 +9,8 @@ import type {
   RequestStatus,
   StoredMessageRow,
 } from '../types';
-import { parseAvatarId } from './avatars';
 import { parseKeyVault, parsePublicKeyBundle } from './crypto';
+import { parseDpUrl } from './dp';
 import { requireSupabase } from './env';
 
 type RawVault = {
@@ -22,7 +21,7 @@ type RawProfile = {
   id: string;
   username: string;
   display_name: string;
-  avatar_id?: unknown;
+  avatar_url?: unknown;
   public_key: unknown;
   profile_vaults?: RawVault | RawVault[] | null;
   created_at: string;
@@ -65,7 +64,7 @@ function normalizeProfile(raw: RawProfile): Profile {
     id: raw.id,
     username: raw.username,
     display_name: raw.display_name,
-    avatar_id: parseAvatarId(raw.avatar_id),
+    avatar_url: parseDpUrl(raw.avatar_url),
     public_key: parsePublicKeyBundle(raw.public_key),
     key_vault: parseKeyVault(extractVault(raw)),
     created_at: raw.created_at,
@@ -76,7 +75,7 @@ export async function fetchProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await requireSupabase()
     .from('profiles')
     .select(
-      'id, username, display_name, avatar_id, public_key, created_at, profile_vaults ( key_vault )',
+      'id, username, display_name, avatar_url, public_key, created_at, profile_vaults ( key_vault )',
     )
     .eq('id', userId)
     .maybeSingle<RawProfile>();
@@ -88,7 +87,7 @@ export async function updateProfile(
   userId: string,
   patch: {
     display_name?: string;
-    avatar_id?: AvatarId;
+    avatar_url?: string | null;
     public_key?: PublicKeyBundle | null;
     key_vault?: KeyVault | null;
   },
@@ -120,7 +119,7 @@ export async function fetchConversations(): Promise<Conversation[]> {
       `id, kind, title, created_by, created_at, last_message_at, request_status, requested_by,
        conversation_members!inner (
          user_id, role,
-         profiles ( id, username, display_name, avatar_id, public_key, created_at )
+         profiles ( id, username, display_name, avatar_url, public_key, created_at )
        )`,
     )
     .order('last_message_at', { ascending: false });
@@ -136,7 +135,7 @@ export async function fetchConversations(): Promise<Conversation[]> {
           role: member.role,
           username: profile.username,
           displayName: profile.display_name,
-          avatarId: parseAvatarId(profile.avatar_id),
+          avatarUrl: parseDpUrl(profile.avatar_url),
           publicKey: parsePublicKeyBundle(profile.public_key),
         } satisfies ConversationMember;
       })
@@ -191,7 +190,7 @@ export async function fetchStoredMessages(conversationId?: string): Promise<Stor
   let query = requireSupabase()
     .from('messages')
     .select(
-      'id, conversation_id, sender_id, kind, iv, ciphertext, sig, byte_size, client_created_at, created_at, seen_at, expires_at',
+      'id, conversation_id, sender_id, kind, iv, ciphertext, sig, byte_size, client_created_at, created_at, seen_at, expires_at, seen_by',
     )
     .order('client_created_at', { ascending: true })
     .limit(400);
@@ -231,8 +230,9 @@ export async function sendEncryptedMessage(input: {
 
 export type SeenMessageReceipt = {
   id: string;
-  seen_at: string;
-  expires_at: string;
+  seen_at: string | null;
+  expires_at: string | null;
+  seen_by?: string[];
 };
 
 export async function markConversationSeen(conversationId: string): Promise<SeenMessageReceipt[]> {
@@ -278,7 +278,6 @@ export async function storeCallSignal(input: {
     p_envelope: input.envelope,
   });
   if (error) {
-    // Realtime remains primary; log-free graceful fallback if rate-limited or call ended.
     throw new Error(error.message || 'Unable to deliver call signal.');
   }
 }
@@ -305,7 +304,7 @@ export async function searchPeople(query: string): Promise<PeopleResult[]> {
       id: string;
       username: string;
       display_name: string;
-      avatar_id?: unknown;
+      avatar_url?: unknown;
       public_key: unknown;
     }>
   )
@@ -316,7 +315,7 @@ export async function searchPeople(query: string): Promise<PeopleResult[]> {
         id: row.id,
         username: row.username,
         display_name: row.display_name,
-        avatar_id: parseAvatarId(row.avatar_id),
+        avatar_url: parseDpUrl(row.avatar_url),
         public_key: publicKey,
       } as PeopleResult;
     })

@@ -63,7 +63,7 @@ const IDLE_STATE: CallState = {
   conversationId: null,
   peerId: null,
   peerName: '',
-  peerAvatarId: 'initials',
+  peerAvatarUrl: null,
   video: false,
   startedAt: null,
   error: null,
@@ -281,14 +281,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
       pc.ontrack = (event) => {
         const tracks = event.streams[0]?.getTracks() ?? [event.track];
+        const refreshStream = () => {
+          const updatedStream = new MediaStream(remote.getTracks());
+          remoteStreamRef.current = updatedStream;
+          setRemoteStream(updatedStream);
+        };
         for (const track of tracks) {
           if (!remote.getTracks().some((existing) => existing.id === track.id)) {
             remote.addTrack(track);
+            track.onunmute = refreshStream;
+            track.onended = refreshStream;
           }
         }
-        const updatedStream = new MediaStream(remote.getTracks());
-        remoteStreamRef.current = updatedStream;
-        setRemoteStream(updatedStream);
+        refreshStream();
       };
 
       pc.onicecandidate = (event) => {
@@ -364,24 +369,39 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Calls require HTTPS and a modern mobile or desktop browser.');
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: video
-          ? {
-              facingMode: { ideal: mode },
-              width: { ideal: 960, max: 1280 },
-              height: { ideal: 720, max: 960 },
-              frameRate: { ideal: 24, max: 30 },
-            }
-          : false,
-      });
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      return stream;
+      const audioConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+          video: video
+            ? {
+                facingMode: { ideal: mode },
+                width: { ideal: 960, max: 1280 },
+                height: { ideal: 720, max: 960 },
+                frameRate: { ideal: 24, max: 30 },
+              }
+            : false,
+        });
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        return stream;
+      } catch (error) {
+        if (video && error instanceof DOMException && error.name === 'NotFoundError') {
+          const audioOnly = await navigator.mediaDevices.getUserMedia({
+            audio: audioConstraints,
+            video: false,
+          });
+          setCameraOff(true);
+          localStreamRef.current = audioOnly;
+          setLocalStream(audioOnly);
+          return audioOnly;
+        }
+        throw error;
+      }
     },
     [],
   );
@@ -447,7 +467,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         conversationId,
         peerId: peer.userId,
         peerName: peer.displayName,
-        peerAvatarId: peer.avatarId,
+        peerAvatarUrl: peer.avatarUrl,
         video,
         startedAt: null,
         error: null,
@@ -672,7 +692,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           conversationId: envelope.conversationId,
           peerId: resolved.peer.userId,
           peerName: resolved.peer.displayName,
-          peerAvatarId: resolved.peer.avatarId,
+          peerAvatarUrl: resolved.peer.avatarUrl,
           video: data.video,
           startedAt: null,
           error: null,

@@ -10,7 +10,7 @@ import {
 } from './crypto';
 import { hasMagicBytes, isAllowedMime, MAX_FILE_BYTES } from './files';
 
-export const MESSAGE_TTL_MS = 120_000;
+export const MESSAGE_TTL_MS = 60_000;
 export const FILE_CHUNK_BYTES = 128 * 1024;
 
 const MAX_CIPHERTEXT = 400_000;
@@ -355,7 +355,7 @@ export function resolveSeenTimers(
   const parsedExp = expiresAtIso ? Date.parse(expiresAtIso) : NaN;
   const seenAt = Number.isFinite(parsedSeen) ? parsedSeen : now;
   const rawExp = Number.isFinite(parsedExp) ? parsedExp : seenAt + MESSAGE_TTL_MS;
-  // Never extend beyond 2 minutes from local observation even if clocks drift slightly.
+  // Never extend beyond 1 minute from local observation even if clocks drift slightly.
   const expiresAt = Math.min(rawExp, now + MESSAGE_TTL_MS + 2_000);
   return { seenAt, expiresAt };
 }

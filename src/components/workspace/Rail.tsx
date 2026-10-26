@@ -24,7 +24,7 @@ export function Rail({
 
   return (
     <nav className="rail" aria-label="Primary">
-      <div className="rail__brand" title="Sotto">
+      <div className="rail__brand" title="Khidki">
         <LogoMark size={30} />
       </div>
 
@@ -98,7 +98,7 @@ export function Rail({
             <Avatar
               name={profile.display_name}
               seed={profile.id}
-              avatarId={profile.avatar_id}
+              dpUrl={profile.avatar_url}
               size="sm"
             />
           </button>
