@@ -2,17 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
-  Clock3,
-  Info,
+  Hourglass,
+  PanelRightOpen,
   Loader2,
   Lock,
   MessageSquare,
   Phone,
   ShieldCheck,
+  Trash2,
   UserPlus,
   Users,
   Video,
-  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCall } from '../../context/CallContext';
@@ -33,11 +33,13 @@ import { LinkDialog } from './LinkDialog';
 import { MessageBubble } from './MessageBubble';
 
 export function ConversationView({
+  enterToSend,
   onBack,
   onOpenInfo,
   onOpenPeople,
   onOpenNewGroup,
 }: {
+  enterToSend: boolean;
   onBack: () => void;
   onOpenInfo: () => void;
   onOpenPeople: () => void;
@@ -70,8 +72,8 @@ export function ConversationView({
         <span className="eyebrow">Chats stay closed on login</span>
         <h2>Select a chat or find someone by username</h2>
         <p>
-          Unread messages wait safely across logouts until you open that person’s chat. Once seen,
-          texts, photos, videos, and files clear automatically after 1 minute.
+          Unread messages stay encrypted while you are away. After everyone else in a chat has read
+          a message, it disappears after one minute.
         </p>
         <div className="stage-empty__actions">
           <button type="button" className="button button--primary" onClick={onOpenPeople}>
@@ -177,22 +179,22 @@ export function ConversationView({
           ) : null}
           <button
             type="button"
-            className="icon-button"
+            className="icon-button conversation__details-button"
             onClick={onOpenInfo}
-            aria-label="Conversation details"
-            title="Details"
+            aria-label="Open conversation details"
+            title="Details and members"
           >
-            <Info size={19} aria-hidden="true" />
+            <PanelRightOpen size={18} aria-hidden="true" />
           </button>
         </div>
       </header>
 
       <div className="conversation__stream" ref={scrollRef}>
         <div className="ephemeral-banner">
-          <Clock3 size={15} aria-hidden="true" />
+          <Hourglass size={15} aria-hidden="true" />
           <span>
-            Unseen messages wait safely across logouts. Once seen, every text, photo, video, and
-            file clears automatically in 1 minute with no manual edits.
+            Unread messages stay encrypted while you are away. After all recipients have read a
+            message, it disappears after one minute.
           </span>
         </div>
 
@@ -233,8 +235,8 @@ export function ConversationView({
             <div>
               <strong>Message request from {title}</strong>
               <p>
-                Accept to reply, share photos, and unlock audio or video calls. Decline removes this
-                request and all queued messages immediately.
+                This request does not expire. Accept to reply, share photos, and call, or remove it
+                to delete the request and its queued messages.
               </p>
             </div>
           </div>
@@ -258,7 +260,7 @@ export function ConversationView({
               disabled={requestBusy}
               onClick={() => void handleDecline()}
             >
-              <X size={16} aria-hidden="true" /> Decline
+              <Trash2 size={16} aria-hidden="true" /> Remove request
             </button>
           </div>
         </div>
@@ -267,8 +269,8 @@ export function ConversationView({
           {isOutgoingPending ? (
             <div className="outgoing-request-bar">
               <span>
-                Message request sent to <strong>{handle}</strong>. File sharing and calls unlock
-                once accepted.
+                Request to <strong>{handle}</strong> is pending with no expiry. Calls and file
+                sharing unlock when accepted.
               </span>
               <button
                 type="button"
@@ -280,7 +282,7 @@ export function ConversationView({
               </button>
             </div>
           ) : null}
-          <Composer allowAttachments={!isPending} />
+          <Composer allowAttachments={!isPending} enterToSend={enterToSend} />
         </>
       )}
 

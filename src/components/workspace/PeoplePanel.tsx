@@ -146,6 +146,20 @@ export function PeoplePanel({ onConversationReady }: { onConversationReady: () =
                     className="button button--secondary button--compact"
                     disabled={starting === person.id}
                     onClick={() => void openDm(person)}
+                    aria-label={
+                      existing?.pending
+                        ? `Open pending request with ${person.display_name}; no expiry`
+                        : existing
+                          ? `Open conversation with ${person.display_name}`
+                          : `Message ${person.display_name}`
+                    }
+                    title={
+                      existing?.pending
+                        ? 'This request does not expire. Open it to cancel.'
+                        : existing
+                          ? 'Open existing conversation'
+                          : 'Send a message request'
+                    }
                   >
                     {starting === person.id ? (
                       <Loader2 className="spin" size={15} aria-hidden="true" />

@@ -12,6 +12,10 @@ test('renders an email-only sign-in screen with no phone fields', async ({ page 
   await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveAttribute('type', 'email');
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
+  await expect(page.locator('.auth-story')).toContainText(
+    'Messages disappear one minute after reading',
+  );
+  await expect(page.locator('.auth-mobile-intro')).toContainText('Auto-delete after 1 minute');
   await expect(page.locator('input[type="tel"]')).toHaveCount(0);
 });
 

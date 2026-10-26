@@ -1,4 +1,4 @@
-import { Inbox, MessageSquare, Settings, UserSearch, Users } from 'lucide-react';
+import { Inbox, MessageSquare, UserSearch, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import type { AppView } from '../../types';
 import { Avatar } from '../ui/Avatar';
@@ -78,22 +78,13 @@ export function Rail({
 
       <div className="rail__footer">
         <ThemeToggle />
-        <button
-          type="button"
-          className="rail-button"
-          onClick={onOpenSettings}
-          aria-label="Settings"
-          title="Settings"
-        >
-          <Settings size={19} aria-hidden="true" />
-        </button>
         {profile ? (
           <button
             type="button"
             className="rail-avatar"
             onClick={onOpenSettings}
-            aria-label={`Account settings for ${profile.display_name}`}
-            title={`${profile.display_name} (@${profile.username})`}
+            aria-label={`Profile and settings for ${profile.display_name}`}
+            title={`${profile.display_name} (@${profile.username}) · Profile and settings`}
           >
             <Avatar
               name={profile.display_name}

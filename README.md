@@ -4,12 +4,14 @@
 
 Khidki is a private end-to-end encrypted messenger for 1-on-1 chats, groups, media sharing, and voice or video calls.
 
-Messages wait safely in an encrypted queue while your contact is offline, stay closed until you open that specific person’s chat, and clear automatically **1 minute after being seen**.
+Messages wait safely in an encrypted queue while your contact is offline, stay closed until you open that specific person’s chat, and disappear automatically **1 minute after being read**.
 
 ## Key Features
 
-- **Zero Auto-Opened Chats on Login**: Signing in never auto-opens any conversation, even if 10 or more people messaged you while offline. Each chat’s 1-minute post-seen countdown starts only when you open that individual conversation.
-- **1-Minute Auto-Clean Across Everything**: Text messages, photos, images, videos, and files all clear automatically 1 minute (`60s`) after being seen. No message editing or manual tampering is permitted.
+- **Zero Auto-Opened Chats on Login**: Signing in never opens a conversation or marks its messages as read. The one-minute auto-delete window starts only after you open that specific chat.
+- **One-Minute Auto-Delete**: Text messages, photos, images, videos, and files disappear one minute after they are read. Messages cannot be edited after sending.
+- **Requests Stay Pending**: Incoming requests remain pending until you accept or remove them; outgoing requests can be cancelled. Requests have no expiry countdown.
+- **Chat Preferences**: Choose light, dark, or system appearance and decide whether Enter sends a message. The keyboard preference stays local to your browser.
 - **End-to-End Browser Encryption**:
   - `ECDH P-256` + `HKDF-SHA256` key agreement
   - `AES-256-GCM` authenticated message and attachment encryption

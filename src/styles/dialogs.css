@@ -162,6 +162,61 @@
   box-shadow: none;
 }
 
+.settings-card--preference {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.settings-card--preference > div {
+  min-width: 0;
+}
+
+.settings-card--preference .muted-note {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.preference-switch {
+  display: block;
+  flex: none;
+  width: 42px;
+  height: 24px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-3);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.preference-switch span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform 140ms ease;
+}
+
+.preference-switch.is-on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.preference-switch.is-on span {
+  transform: translateX(18px);
+}
+
+.preference-switch:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
 .settings-card--session {
   flex-direction: row;
   align-items: center;

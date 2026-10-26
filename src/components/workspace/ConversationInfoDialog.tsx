@@ -404,7 +404,7 @@ export function ConversationInfoDialog({
               <ShieldCheck size={17} aria-hidden="true" />
               <p>
                 Adding or removing a member rotates the group key automatically. Group messages
-                clear automatically one minute after being seen.
+                disappear one minute after all other members have read them.
               </p>
             </div>
 

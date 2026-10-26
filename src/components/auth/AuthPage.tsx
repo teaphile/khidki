@@ -4,7 +4,7 @@ import {
   ArrowRight,
   AtSign,
   Check,
-  Clock3,
+  Hourglass,
   Eye,
   EyeOff,
   KeyRound,
@@ -95,7 +95,7 @@ function friendlyAuthError(error: unknown): string {
 }
 
 export function AuthPage() {
-  const { stageLoginPassword } = useAuth();
+  const { stageLoginPassword, discardStagedLoginPassword } = useAuth();
   const { resolved } = useTheme();
   const [mode, setMode] = useState<Mode>('signin');
   const [displayName, setDisplayName] = useState('');
@@ -184,12 +184,17 @@ export function AuthPage() {
 
     stageLoginPassword(parsed.data, password);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: parsed.data,
-      password,
-    });
-    if (error) {
-      if (/email not confirmed/i.test(error.message)) setNeedsConfirmation(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: parsed.data,
+        password,
+      });
+      if (error) throw error;
+    } catch (error) {
+      discardStagedLoginPassword(parsed.data);
+      if (error instanceof Error && /email not confirmed/i.test(error.message)) {
+        setNeedsConfirmation(true);
+      }
       throw error;
     }
   };
@@ -218,23 +223,32 @@ export function AuthPage() {
 
     stageLoginPassword(parsedEmail.data, parsedPassword.data);
 
-    const { data, error } = await supabase.auth.signUp({
-      email: parsedEmail.data,
-      password: parsedPassword.data,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-        data: {
-          username: parsedUsername.data,
-          display_name: parsedName.data,
-          avatar_url: dpUrl,
-          public_key: bundle,
-          key_vault: vault,
+    const { data, error } = await supabase.auth
+      .signUp({
+        email: parsedEmail.data,
+        password: parsedPassword.data,
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            username: parsedUsername.data,
+            display_name: parsedName.data,
+            avatar_url: dpUrl,
+            public_key: bundle,
+            key_vault: vault,
+          },
         },
-      },
-    });
-    if (error) throw error;
+      })
+      .catch((caught: unknown) => {
+        discardStagedLoginPassword(parsedEmail.data);
+        throw caught;
+      });
+    if (error) {
+      discardStagedLoginPassword(parsedEmail.data);
+      throw error;
+    }
 
     if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      discardStagedLoginPassword(parsedEmail.data);
       throw new Error('An account with that email already exists. Sign in instead.');
     }
 
@@ -247,6 +261,7 @@ export function AuthPage() {
       return;
     }
 
+    discardStagedLoginPassword(parsedEmail.data);
     setNotice(null);
     setMode('check-email');
   };
@@ -323,7 +338,7 @@ export function AuthPage() {
           <ShieldCheck size={13} aria-hidden="true" /> Verified inbox only
         </span>
         <span className="auth-chip">
-          <Clock3 size={13} aria-hidden="true" /> Clears 1m after seen
+          <Hourglass size={13} aria-hidden="true" /> Auto-delete after 1 minute
         </span>
         <span className="auth-chip">
           <Lock size={13} aria-hidden="true" /> No message edits
@@ -340,16 +355,17 @@ export function AuthPage() {
               Nothing lingers behind.
             </h1>
             <p>
-              Messages stay sealed while you are offline and only start their one minute timer when
-              you open that person’s chat. Once read, texts, photos, videos, and files clear
-              automatically.
+              Messages stay encrypted while you are away. Open a conversation to start the
+              auto-delete window: each message disappears one minute after it is read.
             </p>
             <ul className="auth-points">
               <li>
-                <Clock3 size={19} aria-hidden="true" />
+                <Hourglass size={19} aria-hidden="true" />
                 <div>
-                  <strong>Clears one minute after seen</strong>
-                  <span>Unread chats wait safely until you open each conversation yourself.</span>
+                  <strong>Messages disappear one minute after reading</strong>
+                  <span>
+                    Unread chats stay encrypted until you open each conversation yourself.
+                  </span>
                 </div>
               </li>
               <li>
@@ -671,7 +687,8 @@ export function AuthPage() {
       <footer className="auth-footer">
         <span>Khidki · Private messenger</span>
         <span className={`theme-note theme-note--${resolved}`}>
-          <Lock size={14} aria-hidden="true" /> Encrypted end to end · Clears 1m after seen
+          <Lock size={14} aria-hidden="true" /> Encrypted end to end · Auto-deletes one minute after
+          reading
         </span>
       </footer>
     </div>

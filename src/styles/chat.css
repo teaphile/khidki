@@ -60,6 +60,14 @@
   margin-left: auto;
 }
 
+.conversation__details-button {
+  color: var(--accent);
+}
+
+.conversation__details-button:hover {
+  background: var(--accent-soft);
+}
+
 .encryption-badge {
   display: inline-flex;
   align-items: center;
