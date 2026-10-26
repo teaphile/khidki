@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   ArrowRight,
@@ -13,18 +13,24 @@ import {
   Mail,
   ShieldCheck,
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { isUsernameAvailable } from '../../lib/data';
 import { supabase } from '../../lib/env';
 import { publicBundle } from '../../lib/crypto';
-import { commitSignupIdentity, stageSignupIdentity } from '../../lib/identityStore';
+import { commitSignupIdentity, stageSignupIdentityWithVault } from '../../lib/identityStore';
 import {
   displayNameSchema,
   emailSchema,
   firstIssue,
   passwordSchema,
+  sanitizeUsernameInput,
+  signInEmailSchema,
   usernameSchema,
 } from '../../lib/validation';
+import type { AvatarId } from '../../types';
+import { Avatar } from '../ui/Avatar';
+import { AvatarPicker } from '../ui/AvatarPicker';
 import { LogoMark } from '../ui/LogoMark';
 import { ThemeToggle } from '../ui/ThemeToggle';
 
@@ -61,22 +67,25 @@ function friendlyAuthError(error: unknown): string {
     return 'Email or password is incorrect.';
   }
   if (/email not confirmed/i.test(message)) {
-    return 'Confirm your email before signing in.';
+    return 'Verify your email inbox first, then sign in.';
   }
-  if (/user already registered|already been registered/i.test(message)) {
+  if (/user already registered|already been registered|canonical_email/i.test(message)) {
     return 'An account with that email already exists. Sign in instead.';
   }
-  if (/disposable|not supported/i.test(message)) {
-    return 'Disposable email addresses are not supported. Use a permanent inbox.';
+  if (/disposable|temporary|trusted|not supported|not allowed/i.test(message)) {
+    return 'Temporary or unverified email domains are blocked. Use Gmail, Outlook, iCloud, Yahoo, Proton, or Zoho.';
+  }
+  if (/error sending confirmation email|not authorized/i.test(message)) {
+    return 'Verification email could not be delivered right now. Connect custom SMTP in Supabase Auth settings for public email delivery.';
   }
   if (/rate limit|after \d+ seconds|too many/i.test(message)) {
-    return 'Too many attempts. Wait a moment before trying again.';
+    return 'Too many email requests in a short window. Wait a minute and try again.';
   }
   if (/password should|password is too/i.test(message)) {
     return 'Choose a stronger password with at least 10 characters, a letter, and a number.';
   }
-  if (/database error|trigger|duplicate key/i.test(message)) {
-    return 'That username or email is already in use.';
+  if (/username|duplicate key/i.test(message)) {
+    return 'That username or email is already taken.';
   }
   if (/fetch|network|failed to fetch/i.test(message)) {
     return 'Unable to reach the server. Check your connection and try again.';
@@ -85,14 +94,21 @@ function friendlyAuthError(error: unknown): string {
 }
 
 export function AuthPage() {
+  const { stageLoginPassword } = useAuth();
   const { resolved } = useTheme();
   const [mode, setMode] = useState<Mode>('signin');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  const [avatarId, setAvatarId] = useState<AvatarId>('fox');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [usernameState, setUsernameState] = useState<'idle' | 'checking' | 'available' | 'taken'>(
+    'idle',
+  );
+  const checkSeq = useRef(0);
+
   const startupError = useMemo(
     () => safeStartupAuthError(window.location.search, window.location.hash),
     [],
@@ -106,6 +122,32 @@ export function AuthPage() {
     if (!startupError) return;
     window.history.replaceState({}, document.title, window.location.pathname);
   }, [startupError]);
+
+  useEffect(() => {
+    if (mode !== 'signup') {
+      setUsernameState('idle');
+      return;
+    }
+    const parsed = usernameSchema.safeParse(username);
+    if (!parsed.success) {
+      setUsernameState('idle');
+      return;
+    }
+    const seq = ++checkSeq.current;
+    setUsernameState('checking');
+    const timer = window.setTimeout(() => {
+      void isUsernameAvailable(parsed.data)
+        .then((ok) => {
+          if (checkSeq.current === seq) {
+            setUsernameState(ok ? 'available' : 'taken');
+          }
+        })
+        .catch(() => {
+          if (checkSeq.current === seq) setUsernameState('idle');
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [mode, username]);
 
   const passwordRules = useMemo(
     () => [
@@ -127,9 +169,11 @@ export function AuthPage() {
 
   const handleSignIn = async () => {
     if (!supabase) return;
-    const parsed = emailSchema.safeParse(email);
+    const parsed = signInEmailSchema.safeParse(email);
     if (!parsed.success) throw new Error(firstIssue(parsed.error));
     if (!password) throw new Error('Enter your password.');
+
+    stageLoginPassword(parsed.data, password);
 
     const { error } = await supabase.auth.signInWithPassword({
       email: parsed.data,
@@ -157,8 +201,13 @@ export function AuthPage() {
       throw new Error('That username is already taken.');
     }
 
-    const identity = await stageSignupIdentity(parsedEmail.data);
+    const { identity, vault } = await stageSignupIdentityWithVault(
+      parsedEmail.data,
+      parsedPassword.data,
+    );
     const bundle = publicBundle(identity);
+
+    stageLoginPassword(parsedEmail.data, parsedPassword.data);
 
     const { data, error } = await supabase.auth.signUp({
       email: parsedEmail.data,
@@ -168,11 +217,18 @@ export function AuthPage() {
         data: {
           username: parsedUsername.data,
           display_name: parsedName.data,
+          avatar_id: avatarId,
           public_key: bundle,
+          key_vault: vault,
         },
       },
     });
     if (error) throw error;
+
+    // Supabase returns an empty identities array if the email already exists while obfuscating enumeration
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      throw new Error('An account with that email already exists. Sign in instead.');
+    }
 
     if (data.user?.id) {
       await commitSignupIdentity(data.user.id, parsedEmail.data, identity);
@@ -189,7 +245,7 @@ export function AuthPage() {
 
   const handleForgot = async () => {
     if (!supabase) return;
-    const parsed = emailSchema.safeParse(email);
+    const parsed = signInEmailSchema.safeParse(email);
     if (!parsed.success) throw new Error(firstIssue(parsed.error));
     const { error } = await supabase.auth.resetPasswordForEmail(parsed.data, {
       redirectTo: `${window.location.origin}/reset-password`,
@@ -214,7 +270,7 @@ export function AuthPage() {
         options: { emailRedirectTo: `${window.location.origin}/` },
       });
       if (error) throw error;
-      setNotice('A fresh confirmation email is on its way.');
+      setNotice('A fresh verification link has been sent to your inbox.');
     } catch (error) {
       setFormError(friendlyAuthError(error));
     } finally {
@@ -248,45 +304,57 @@ export function AuthPage() {
         <div className="auth-topbar__actions">
           <span className="privacy-pill">
             <ShieldCheck size={15} aria-hidden="true" />
-            Private by design
+            End-to-end encrypted
           </span>
           <ThemeToggle />
         </div>
       </header>
 
+      <div className="auth-mobile-intro" aria-label="Highlights">
+        <span className="auth-chip">
+          <ShieldCheck size={13} aria-hidden="true" /> Verified inbox only
+        </span>
+        <span className="auth-chip">
+          <Clock3 size={13} aria-hidden="true" /> Seen + 2m self-clean
+        </span>
+        <span className="auth-chip">
+          <Lock size={13} aria-hidden="true" /> Zero message edits
+        </span>
+      </div>
+
       <main className="auth-stage">
         <section className="auth-story" aria-label="About Sotto">
           <div className="auth-story__content">
-            <span className="eyebrow">Private conversations. Nothing kept.</span>
+            <span className="eyebrow">Private conversations</span>
             <h1>
               Speak freely.
               <br />
-              Leave no archive.
+              Self-cleaning after seen.
             </h1>
             <p>
-              Sotto is built for conversations that belong to the moment. Messages and files are
-              encrypted in your browser and never stored on a server.
+              Messages stay encrypted while your contact is offline, then automatically erase two
+              minutes after being seen. Nothing can be edited or tampered with.
             </p>
             <ul className="auth-points">
               <li>
                 <Clock3 size={19} aria-hidden="true" />
                 <div>
-                  <strong>Ephemeral by default</strong>
-                  <span>No message history. Return tomorrow to a clean slate.</span>
+                  <strong>Seen plus two minutes</strong>
+                  <span>Unread messages wait safely across days and self-clean once read.</span>
                 </div>
               </li>
               <li>
                 <ShieldCheck size={19} aria-hidden="true" />
                 <div>
-                  <strong>Encrypted in your browser</strong>
-                  <span>Your keys stay on your device, never on the server.</span>
+                  <strong>Browser-encrypted keys</strong>
+                  <span>Messages, photos, and calls stay sealed end to end.</span>
                 </div>
               </li>
               <li>
                 <AtSign size={19} aria-hidden="true" />
                 <div>
-                  <strong>Email-verified people</strong>
-                  <span>Find people by username. Every account has a real inbox.</span>
+                  <strong>Verified real accounts</strong>
+                  <span>Temp mail is blocked. Message requests protect your inbox.</span>
                 </div>
               </li>
             </ul>
@@ -300,11 +368,11 @@ export function AuthPage() {
                 <span className="auth-success__icon">
                   <Mail size={24} aria-hidden="true" />
                 </span>
-                <span className="eyebrow">One more step</span>
-                <h2>Check your inbox.</h2>
+                <span className="eyebrow">Verify your email</span>
+                <h2>Check your inbox</h2>
                 <p>
-                  We sent a confirmation link to <strong>{email}</strong>. Open it to verify your
-                  account, then return here to sign in.
+                  We sent a verification link to <strong>{email}</strong>. Tap the link in your
+                  email to activate <strong>@{username}</strong>, then sign in here.
                 </p>
                 {notice ? <p className="inline-notice">{notice}</p> : null}
                 {formError ? (
@@ -319,7 +387,7 @@ export function AuthPage() {
                   disabled={busy}
                 >
                   {busy ? <Loader2 className="spin" size={18} aria-hidden="true" /> : null}
-                  Resend confirmation email
+                  Resend verification email
                 </button>
                 <button
                   type="button"
@@ -335,10 +403,10 @@ export function AuthPage() {
                   <Mail size={24} aria-hidden="true" />
                 </span>
                 <span className="eyebrow">Reset requested</span>
-                <h2>Check your email.</h2>
+                <h2>Check your email</h2>
                 <p>
-                  If an account exists for <strong>{email}</strong>, a secure reset link is on its
-                  way. The link expires shortly for your protection.
+                  If an account exists for <strong>{email}</strong>, a password reset link is on its
+                  way.
                 </p>
                 <button
                   type="button"
@@ -355,22 +423,22 @@ export function AuthPage() {
                     {mode === 'signin'
                       ? 'Welcome back'
                       : mode === 'signup'
-                        ? 'Create an account'
+                        ? 'Create account'
                         : 'Reset access'}
                   </span>
                   <h2>
                     {mode === 'signin'
                       ? 'Sign in to Sotto'
                       : mode === 'signup'
-                        ? 'Start a private conversation'
+                        ? 'Create your private profile'
                         : 'Forgot your password?'}
                   </h2>
                   <p>
                     {mode === 'signin'
-                      ? 'Use the email and password you registered with.'
+                      ? 'Sign in with your verified email and password.'
                       : mode === 'signup'
-                        ? 'A verified email address is required. No phone numbers.'
-                        : 'We will email you a secure link to choose a new password.'}
+                        ? 'Use a real personal inbox. Temporary mail is blocked.'
+                        : 'We will email you a link to set a new password.'}
                   </p>
                 </div>
 
@@ -399,38 +467,71 @@ export function AuthPage() {
 
                 <form className="auth-form" onSubmit={onSubmit} noValidate>
                   {mode === 'signup' ? (
-                    <div className="form-grid form-grid--two">
-                      <label className="field">
-                        <span>Display name</span>
-                        <input
-                          value={displayName}
-                          onChange={(event) => setDisplayName(event.target.value)}
-                          autoComplete="name"
-                          maxLength={48}
-                          placeholder="Ada Lovelace"
-                          required
+                    <>
+                      <div className="signup-avatar-block">
+                        <div className="signup-avatar-block__head">
+                          <Avatar
+                            name={displayName || 'You'}
+                            seed={username || 'sotto'}
+                            avatarId={avatarId}
+                            size="md"
+                          />
+                          <div>
+                            <strong>Profile sticker</strong>
+                            <span>Pick a lightweight symbol for your display picture</span>
+                          </div>
+                        </div>
+                        <AvatarPicker
+                          value={avatarId}
+                          onChange={setAvatarId}
+                          name={displayName}
+                          seed={username || 'sotto'}
                         />
-                      </label>
-                      <label className="field">
-                        <span>Username</span>
-                        <span className="input-prefix">
-                          <AtSign size={16} aria-hidden="true" />
+                      </div>
+
+                      <div className="form-grid form-grid--two">
+                        <label className="field">
+                          <span>Display name</span>
                           <input
-                            value={username}
-                            onChange={(event) =>
-                              setUsername(
-                                event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
-                              )
-                            }
-                            autoComplete="username"
-                            maxLength={24}
-                            placeholder="ada"
-                            spellCheck={false}
+                            value={displayName}
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            autoComplete="name"
+                            maxLength={36}
+                            placeholder="Ashish"
                             required
                           />
-                        </span>
-                      </label>
-                    </div>
+                        </label>
+                        <label className="field">
+                          <span className="field__label-row">
+                            <span>Username</span>
+                            <small className="field__counter">{username.length}/10</small>
+                          </span>
+                          <span className="input-prefix">
+                            <AtSign size={16} aria-hidden="true" />
+                            <input
+                              value={username}
+                              onChange={(event) =>
+                                setUsername(sanitizeUsernameInput(event.target.value))
+                              }
+                              autoComplete="username"
+                              minLength={3}
+                              maxLength={10}
+                              placeholder="ashish01"
+                              spellCheck={false}
+                              autoCapitalize="none"
+                              required
+                            />
+                          </span>
+                          <small className={`field__hint field__hint--${usernameState}`}>
+                            {usernameState === 'available'
+                              ? 'Username available'
+                              : usernameState === 'taken'
+                                ? 'Already taken'
+                                : '3 to 10 chars, a-z and 0-9 only'}
+                          </small>
+                        </label>
+                      </div>
+                    </>
                   ) : null}
 
                   <label className="field">
@@ -444,7 +545,8 @@ export function AuthPage() {
                         onChange={(event) => setEmail(event.target.value)}
                         autoComplete="email"
                         maxLength={254}
-                        placeholder="you@example.com"
+                        placeholder="you@gmail.com"
+                        autoCapitalize="none"
                         required
                       />
                     </span>
@@ -527,7 +629,7 @@ export function AuthPage() {
                       <span>{formError}</span>
                       {needsConfirmation ? (
                         <button type="button" className="text-button" onClick={resendConfirmation}>
-                          Resend confirmation email
+                          Resend verification email
                         </button>
                       ) : null}
                     </div>
@@ -561,8 +663,8 @@ export function AuthPage() {
 
                 <p className="auth-card__footnote">
                   {mode === 'signup'
-                    ? 'By continuing, you confirm this is your own email address. Sotto never asks for a phone number.'
-                    : 'Sotto is a private messenger. Messages are never saved to a message archive.'}
+                    ? 'Email verification is required before first sign in. No phone number needed.'
+                    : 'Messages stay encrypted until seen and erase automatically two minutes after reading.'}
                 </p>
               </>
             )}
@@ -571,9 +673,9 @@ export function AuthPage() {
       </main>
 
       <footer className="auth-footer">
-        <span>Sotto · Private conversations. Nothing kept.</span>
+        <span>Sotto · Private conversations</span>
         <span className={`theme-note theme-note--${resolved}`}>
-          <Lock size={14} aria-hidden="true" /> End-to-end encrypted · Zero message archive
+          <Lock size={14} aria-hidden="true" /> End-to-end encrypted · Seen + 2m auto-clean
         </span>
       </footer>
     </div>

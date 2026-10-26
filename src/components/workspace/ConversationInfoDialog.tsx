@@ -18,7 +18,14 @@ import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import { searchPeople } from '../../lib/data';
 import { publicBundle, safetyNumberForPair } from '../../lib/crypto';
-import { conversationHandle, conversationSeed, conversationTitle, dmPeer } from '../../lib/format';
+import {
+  conversationAvatarId,
+  conversationHandle,
+  conversationSeed,
+  conversationTitle,
+  dmPeer,
+} from '../../lib/format';
+import { sanitizeUsernameInput } from '../../lib/validation';
 import type { Conversation, PeopleResult } from '../../types';
 import { Avatar } from '../ui/Avatar';
 import { Modal } from '../ui/Modal';
@@ -41,6 +48,7 @@ export function ConversationInfoDialog({
   const isAdmin = me?.role === 'admin';
   const title = conversationTitle(conversation, myId);
   const peer = dmPeer(conversation, myId);
+  const isPending = conversation.kind === 'dm' && conversation.requestStatus === 'pending';
 
   const [renameValue, setRenameValue] = useState(conversation.title);
   const [renaming, setRenaming] = useState(false);
@@ -102,7 +110,7 @@ export function ConversationInfoDialog({
         .finally(() => {
           if (requestId.current === id) setSearching(false);
         });
-    }, 280);
+    }, 240);
     return () => window.clearTimeout(timer);
   }, [conversation.kind, conversation.members, isAdmin, open, query]);
 
@@ -112,7 +120,7 @@ export function ConversationInfoDialog({
       await addGroupMember(conversation.id, person.username);
       setQuery('');
       setResults([]);
-      toast(`${person.display_name} was added. The group key was rotated.`, 'success');
+      toast(`${person.display_name} was added and the group key rotated.`, 'success');
     } catch (caught) {
       toast(caught instanceof Error ? caught.message : 'Unable to add that person.', 'error');
     } finally {
@@ -128,7 +136,7 @@ export function ConversationInfoDialog({
     try {
       await removeGroupMember(conversation.id, userId);
       setConfirmRemove(null);
-      toast(`${name} was removed. A new group key was shared.`, 'success');
+      toast(`${name} was removed and a fresh group key shared.`, 'success');
     } catch (caught) {
       toast(caught instanceof Error ? caught.message : 'Unable to remove that person.', 'error');
     }
@@ -199,6 +207,7 @@ export function ConversationInfoDialog({
           <Avatar
             name={title}
             seed={conversationSeed(conversation, myId)}
+            avatarId={conversationAvatarId(conversation, myId)}
             group={conversation.kind === 'group'}
             size="large"
           />
@@ -224,6 +233,7 @@ export function ConversationInfoDialog({
               <button
                 type="button"
                 className="button button--secondary"
+                disabled={isPending}
                 onClick={() => void call(false)}
               >
                 <Phone size={17} aria-hidden="true" /> Audio call
@@ -231,6 +241,7 @@ export function ConversationInfoDialog({
               <button
                 type="button"
                 className="button button--secondary"
+                disabled={isPending}
                 onClick={() => void call(true)}
               >
                 <Video size={18} aria-hidden="true" /> Video call
@@ -255,8 +266,8 @@ export function ConversationInfoDialog({
             <div className="info-note">
               <ShieldCheck size={17} aria-hidden="true" />
               <p>
-                Compare this safety number with {peer.displayName} in person or over another trusted
-                channel. A mismatch could mean the account key changed.
+                Compare this safety number with {peer.displayName} over another trusted channel.
+                Both devices compute the exact same code when your connection is authentic.
               </p>
             </div>
           </>
@@ -269,7 +280,7 @@ export function ConversationInfoDialog({
                   <input
                     value={renameValue}
                     onChange={(event) => setRenameValue(event.target.value)}
-                    maxLength={64}
+                    maxLength={48}
                   />
                 </label>
                 <button
@@ -297,7 +308,12 @@ export function ConversationInfoDialog({
             <div className="member-list">
               {conversation.members.map((member) => (
                 <div className="member-row" key={member.userId}>
-                  <Avatar name={member.displayName} seed={member.userId} size="small" />
+                  <Avatar
+                    name={member.displayName}
+                    seed={member.userId}
+                    avatarId={member.avatarId}
+                    size="small"
+                  />
                   <div>
                     <strong>
                       {member.displayName}
@@ -342,10 +358,13 @@ export function ConversationInfoDialog({
                   <Search size={16} aria-hidden="true" />
                   <input
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search by username"
-                    maxLength={40}
+                    onChange={(event) =>
+                      setQuery(sanitizeUsernameInput(event.target.value.replace(/^@/, '')))
+                    }
+                    placeholder="Search @username"
+                    maxLength={10}
                     autoComplete="off"
+                    autoCapitalize="none"
                   />
                   {searching ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
                 </span>
@@ -359,7 +378,12 @@ export function ConversationInfoDialog({
                         onClick={() => void add(person)}
                         disabled={adding !== null}
                       >
-                        <Avatar name={person.display_name} seed={person.id} size="small" />
+                        <Avatar
+                          name={person.display_name}
+                          seed={person.id}
+                          avatarId={person.avatar_id}
+                          size="small"
+                        />
                         <span>
                           <strong>{person.display_name}</strong>
                           <small>@{person.username}</small>
@@ -379,15 +403,15 @@ export function ConversationInfoDialog({
             <div className="info-note">
               <ShieldCheck size={17} aria-hidden="true" />
               <p>
-                Adding or removing a member rotates the group key. Messages are never uploaded to a
-                server archive.
+                Adding or removing a member rotates the group key automatically. Group messages
+                self-clean two minutes after being seen.
               </p>
             </div>
 
             <div className="danger-zone">
               <div>
                 <strong>Leave this group</strong>
-                <p>You will stop receiving its realtime messages immediately.</p>
+                <p>You will stop receiving group messages immediately.</p>
               </div>
               <button
                 type="button"

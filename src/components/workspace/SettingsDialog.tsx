@@ -20,7 +20,9 @@ import { fingerprint, publicBundle } from '../../lib/crypto';
 import { supabase } from '../../lib/env';
 import { clearIdentity } from '../../lib/identityStore';
 import { displayNameSchema, firstIssue } from '../../lib/validation';
-import type { ThemeMode } from '../../types';
+import type { AvatarId, ThemeMode } from '../../types';
+import { Avatar } from '../ui/Avatar';
+import { AvatarPicker } from '../ui/AvatarPicker';
 import { Modal } from '../ui/Modal';
 
 const THEMES: Array<{ mode: ThemeMode; label: string; icon: typeof Sun }> = [
@@ -34,6 +36,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const { mode, setMode } = useTheme();
   const { toast } = useToast();
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
+  const [avatarId, setAvatarId] = useState<AvatarId>(profile?.avatar_id ?? 'initials');
   const [saving, setSaving] = useState(false);
   const [safetyNumber, setSafetyNumber] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -44,10 +47,11 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   useEffect(() => {
     if (!open) return;
     setDisplayName(profile?.display_name ?? '');
+    setAvatarId(profile?.avatar_id ?? 'initials');
     setDeleteMode(false);
     setDeleteConfirm('');
     setResetSent(false);
-  }, [open, profile?.display_name]);
+  }, [open, profile?.avatar_id, profile?.display_name]);
 
   useEffect(() => {
     if (!open || !identity) return;
@@ -60,6 +64,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     };
   }, [identity, open]);
 
+  const hasProfileChanges = profile
+    ? displayName.trim() !== profile.display_name || avatarId !== profile.avatar_id
+    : false;
+
   const saveProfile = async () => {
     if (!profile) return;
     const parsed = displayNameSchema.safeParse(displayName);
@@ -69,9 +77,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
     setSaving(true);
     try {
-      await updateProfile(profile.id, { display_name: parsed.data });
+      await updateProfile(profile.id, {
+        display_name: parsed.data,
+        avatar_id: avatarId,
+      });
       await refreshProfile();
-      toast('Display name updated.', 'success');
+      toast('Profile updated.', 'success');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Unable to update your profile.', 'error');
     } finally {
@@ -125,7 +136,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       open={open}
       onClose={onClose}
       title="Settings"
-      description="Your account, appearance, and device security."
+      description="Your profile sticker, appearance, and encryption security."
       size="medium"
       footer={
         <button type="button" className="button button--secondary" onClick={onClose}>
@@ -136,25 +147,44 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       <div className="settings-panel">
         <section className="settings-section">
           <div className="section-heading">
-            <h4>Profile</h4>
+            <h4>Profile & display sticker</h4>
             <span>Username is permanent</span>
           </div>
+
+          <div className="settings-avatar-preview">
+            <Avatar
+              name={displayName || profile?.display_name || 'You'}
+              seed={profile?.id ?? 'you'}
+              avatarId={avatarId}
+              size="lg"
+            />
+            <div>
+              <strong>{displayName || profile?.display_name}</strong>
+              <span>@{profile?.username}</span>
+            </div>
+          </div>
+
+          <AvatarPicker
+            value={avatarId}
+            onChange={setAvatarId}
+            name={displayName || profile?.display_name || 'You'}
+            seed={profile?.id ?? 'you'}
+          />
+
           <div className="settings-row settings-row--profile">
             <label className="field">
               <span>Display name</span>
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                maxLength={48}
+                maxLength={36}
               />
             </label>
             <button
               type="button"
-              className="button button--secondary"
+              className="button button--primary"
               onClick={() => void saveProfile()}
-              disabled={
-                saving || !displayName.trim() || displayName.trim() === profile?.display_name
-              }
+              disabled={saving || !displayName.trim() || !hasProfileChanges}
             >
               {saving ? (
                 <Loader2 className="spin" size={16} aria-hidden="true" />
@@ -164,6 +194,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               Save
             </button>
           </div>
+
           <div className="info-grid">
             <div>
               <span>Username</span>
@@ -179,7 +210,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         <section className="settings-section">
           <div className="section-heading">
             <h4>Appearance</h4>
-            <span>No layout changes</span>
+            <span>Light, dark, or system</span>
           </div>
           <div className="theme-options" role="radiogroup" aria-label="Theme">
             {THEMES.map((option) => {
@@ -203,13 +234,13 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
         <section className="settings-section">
           <div className="section-heading">
-            <h4>Device security</h4>
-            <span>Browser-held identity</span>
+            <h4>Encryption identity</h4>
+            <span>Password-backed vault</span>
           </div>
           <div className="safety-number">
             <div>
-              <span>Your device identity</span>
-              <strong>{safetyNumber ?? 'Generating…'}</strong>
+              <span>Your identity fingerprint</span>
+              <strong>{safetyNumber ?? 'Generating...'}</strong>
             </div>
             <button
               type="button"
@@ -224,8 +255,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <div className="info-note">
             <ShieldCheck size={17} aria-hidden="true" />
             <p>
-              Your private keys stay in this browser. Clearing site data removes this device's
-              identity; sign in again to create a new one. Nothing is stored on a server.
+              Your private keys are sealed in this browser and backed up in an encrypted vault
+              locked with your password so unread messages stay readable even if you sign back in
+              days later.
             </p>
           </div>
           <button
@@ -249,7 +281,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <div className="settings-row">
             <div>
               <strong>Sign out of this browser</strong>
-              <p>All decrypted messages are removed from memory immediately.</p>
+              <p>Decrypted messages are cleared from device memory immediately.</p>
             </div>
             <button
               type="button"
@@ -269,7 +301,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             <div className="settings-row">
               <div>
                 <strong>Permanently remove your account</strong>
-                <p>Profile, memberships, and wrapped conversation keys are deleted.</p>
+                <p>Profile, memberships, keys, and queued ciphertexts are erased.</p>
               </div>
               <button
                 type="button"

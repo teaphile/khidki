@@ -73,37 +73,33 @@
   text-align: center;
 }
 
-.call-avatar {
+.call-avatar,
+.call-avatar-wrap {
   position: relative;
   display: grid;
   place-items: center;
-  width: clamp(104px, 18vw, 150px);
-  height: clamp(104px, 18vw, 150px);
   margin-bottom: 13px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 47% 53% 58% 42% / 48% 44% 56% 52%;
-  background:
-    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.22), transparent 42%),
-    linear-gradient(145deg, rgba(228, 87, 61, 0.9), rgba(31, 111, 104, 0.92));
-  color: #fff8ef;
-  font-family: var(--font-display);
-  font-size: clamp(34px, 6vw, 50px);
-  font-weight: 560;
-  letter-spacing: -0.04em;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
 }
 
-.call-avatar.is-live::before,
-.call-avatar.is-live::after {
+.call-avatar-wrap .avatar {
+  width: clamp(104px, 22vw, 138px);
+  height: clamp(104px, 22vw, 138px);
+  font-size: clamp(30px, 6vw, 44px);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+}
+
+.call-avatar-wrap::before,
+.call-avatar-wrap::after {
   content: '';
   position: absolute;
-  inset: -12px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: inherit;
+  inset: -11px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 42% 58% 55% 45% / 48% 44% 56% 52%;
+  pointer-events: none;
   animation: call-ring 2.8s ease-out infinite;
 }
 
-.call-avatar.is-live::after {
+.call-avatar-wrap::after {
   animation-delay: 1.4s;
 }
 

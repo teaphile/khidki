@@ -1,4 +1,4 @@
-import type { Conversation } from '../types';
+import type { AvatarId, Conversation } from '../types';
 
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -30,12 +30,17 @@ export function conversationHandle(conversation: Conversation, myId: string): st
     return `${count} ${count === 1 ? 'member' : 'members'}`;
   }
   const peer = dmPeer(conversation, myId);
-  return peer ? `@${peer.username}` : 'Private conversation';
+  return peer ? `@${peer.username}` : 'Private chat';
 }
 
 export function conversationSeed(conversation: Conversation, myId: string): string {
   if (conversation.kind === 'group') return conversation.id;
   return dmPeer(conversation, myId)?.userId ?? conversation.id;
+}
+
+export function conversationAvatarId(conversation: Conversation, myId: string): AvatarId {
+  if (conversation.kind === 'group') return 'initials';
+  return dmPeer(conversation, myId)?.avatarId ?? 'initials';
 }
 
 export function formatClock(timestamp: number): string {

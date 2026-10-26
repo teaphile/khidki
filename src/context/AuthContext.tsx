@@ -5,7 +5,13 @@ import type { Identity, Profile } from '../types';
 import { fetchProfile, updateProfile } from '../lib/data';
 import { publicBundle, samePublicKey } from '../lib/crypto';
 import { supabase, supabaseConfigured } from '../lib/env';
-import { clearIdentityMemoryCache, getOrCreateIdentity } from '../lib/identityStore';
+import {
+  clearIdentityMemoryCache,
+  createVaultedIdentity,
+  getOrCreateIdentity,
+  loadIdentity,
+  restoreIdentityFromVault,
+} from '../lib/identityStore';
 
 type AuthContextValue = {
   configured: boolean;
@@ -14,13 +20,35 @@ type AuthContextValue = {
   user: User | null;
   profile: Profile | null;
   identity: Identity | null;
+  vaultLocked: boolean;
   profileError: string | null;
   hadRecoverySession: boolean;
+  stageLoginPassword: (email: string, password: string) => void;
+  unlockKeyVault: (password: string) => Promise<boolean>;
+  rotateIdentityWithPassword: (password: string) => Promise<void>;
   refreshProfile: () => Promise<Profile | null>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+// Ephemeral in-memory password handoff between AuthPage.signIn and AuthProvider's
+// session listener; entries self-wipe immediately on read or after 20 seconds.
+const stagedPasswords = new Map<string, { password: string; expiresAt: number }>();
+
+function setStagedPassword(email: string, password: string): void {
+  const key = email.trim().toLowerCase();
+  stagedPasswords.set(key, { password, expiresAt: Date.now() + 20_000 });
+}
+
+function consumeStagedPassword(email: string | null): string | null {
+  if (!email) return null;
+  const key = email.trim().toLowerCase();
+  const entry = stagedPasswords.get(key);
+  stagedPasswords.delete(key);
+  if (!entry || entry.expiresAt < Date.now()) return null;
+  return entry.password;
+}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -40,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const [vaultLocked, setVaultLocked] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [bootLoading, setBootLoading] = useState(Boolean(supabase));
   const [accountLoading, setAccountLoading] = useState(false);
@@ -47,6 +76,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const user = session?.user ?? null;
   const userId = user?.id ?? null;
   const userEmail = user?.email ?? null;
+
+  const stageLoginPassword = useCallback((email: string, password: string) => {
+    setStagedPassword(email, password);
+  }, []);
 
   useEffect(() => {
     if (!supabase) return;
@@ -72,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (previous?.user?.id && previous.user.id !== nextSession?.user?.id) {
           setProfile(null);
           setIdentity(null);
+          setVaultLocked(false);
           setProfileError(null);
         }
         return nextSession;
@@ -79,8 +113,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') setHadRecoverySession(true);
       if (event === 'SIGNED_OUT') {
         clearIdentityMemoryCache();
+        stagedPasswords.clear();
         setProfile(null);
         setIdentity(null);
+        setVaultLocked(false);
         setProfileError(null);
         setAccountLoading(false);
         setHadRecoverySession(false);
@@ -115,15 +151,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const deviceIdentity = await getOrCreateIdentity(userId, loaded.public_key, userEmail);
-        if (!active) return;
-        const bundle = publicBundle(deviceIdentity);
+        const stagedPassword = consumeStagedPassword(userEmail);
 
+        // 1. Check if this device already holds the matching identity (or staged signup slot).
+        const existingLocal = await loadIdentity(userId);
+        if (
+          existingLocal &&
+          loaded.public_key &&
+          samePublicKey(publicBundle(existingLocal), loaded.public_key)
+        ) {
+          const sealed = await getOrCreateIdentity(userId, loaded.public_key, userEmail);
+          if (!active) return;
+          setVaultLocked(false);
+          setIdentity(sealed);
+          setProfile(loaded);
+          return;
+        }
+
+        // 2. Try unlocking the encrypted cloud key vault if password was just entered.
+        if (loaded.key_vault && stagedPassword) {
+          const restored = await restoreIdentityFromVault(
+            userId,
+            loaded.key_vault,
+            stagedPassword,
+            loaded.public_key,
+          );
+          if (!active) return;
+          if (restored) {
+            setVaultLocked(false);
+            setIdentity(restored);
+            setProfile(loaded);
+            return;
+          }
+        }
+
+        // 3. Try migrating a pending signup slot or legacy key that matches loaded.public_key.
+        const candidate = await getOrCreateIdentity(userId, loaded.public_key, userEmail);
+        if (!active) return;
+        const bundle = publicBundle(candidate);
+
+        if (loaded.public_key && samePublicKey(loaded.public_key, bundle)) {
+          setVaultLocked(false);
+          setIdentity(candidate);
+          setProfile(loaded);
+          return;
+        }
+
+        // 4. If profile has a password-protected key_vault (e.g. opened confirmation link in
+        // a separate mobile webview), prompt for password instead of overwriting their keys!
+        if (loaded.public_key && loaded.key_vault) {
+          setProfile(loaded);
+          setIdentity(null);
+          setVaultLocked(true);
+          return;
+        }
+
+        // 5. First-ever key setup (or legacy account without a vault): publish device public key.
         if (!samePublicKey(loaded.public_key, bundle)) {
           loaded = await updateProfile(userId, { public_key: bundle });
         }
         if (!active) return;
-        setIdentity(deviceIdentity);
+        setVaultLocked(false);
+        setIdentity(candidate);
         setProfile(loaded);
       } catch (error) {
         if (active) setProfileError(friendlyAccountError(error));
@@ -136,6 +225,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, [userId, userEmail]);
+
+  const unlockKeyVault = useCallback(
+    async (password: string): Promise<boolean> => {
+      if (!userId || !profile?.key_vault) return false;
+      const restored = await restoreIdentityFromVault(
+        userId,
+        profile.key_vault,
+        password,
+        profile.public_key,
+      );
+      if (!restored) return false;
+      setIdentity(restored);
+      setVaultLocked(false);
+      return true;
+    },
+    [profile, userId],
+  );
+
+  const rotateIdentityWithPassword = useCallback(
+    async (password: string): Promise<void> => {
+      if (!userId) throw new Error('You are signed out.');
+      const { identity: nextIdentity, vault } = await createVaultedIdentity(userId, password);
+      const updated = await updateProfile(userId, {
+        public_key: publicBundle(nextIdentity),
+        key_vault: vault,
+      });
+      setProfile(updated);
+      setIdentity(nextIdentity);
+      setVaultLocked(false);
+    },
+    [userId],
+  );
 
   const refreshProfile = useCallback(async (): Promise<Profile | null> => {
     if (!userId) return null;
@@ -151,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     clearIdentityMemoryCache();
+    stagedPasswords.clear();
     if (!supabase) return;
     await supabase.auth.signOut({ scope: 'local' });
   }, []);
@@ -165,8 +287,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       profile,
       identity,
+      vaultLocked,
       profileError,
       hadRecoverySession,
+      stageLoginPassword,
+      unlockKeyVault,
+      rotateIdentityWithPassword,
       refreshProfile,
       signOut,
     }),
@@ -176,8 +302,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       profile,
       identity,
+      vaultLocked,
       profileError,
       hadRecoverySession,
+      stageLoginPassword,
+      unlockKeyVault,
+      rotateIdentityWithPassword,
       refreshProfile,
       signOut,
     ],

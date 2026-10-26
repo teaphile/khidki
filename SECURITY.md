@@ -30,39 +30,43 @@ no long-term support branches.
 
 ### Protected against
 
-- **Database or storage compromise.** Message text, captions, file names, and
-  file bytes are never written to Postgres or Supabase Storage. A dump of the
-  database exposes account and conversation metadata, not content.
-- **Unauthorized database access and abuse.** Row-level security restricts
-  profiles, conversations, memberships, and wrapped keys. Clients have no insert
-  or delete grants on conversation tables; membership and discovery go through
-  `SECURITY DEFINER` RPCs guarded by per-user rate limits, confirmed-user checks,
-  and strict P-256 public-key validation (blocking oversized JSON or accidental
-  private scalar uploads).
+- **Database or storage compromise.** Plaintext message text, captions, file
+  names, file bytes, and unwrapped keys are never written to Postgres or
+  Supabase Storage. The encrypted offline delivery queue (`public.messages`)
+  stores only AES-256-GCM ciphertext signed with ECDSA P-256, and the password-wrapped
+  identity backup (`public.profile_vaults`) is encrypted client-side with
+  PBKDF2-SHA256 (210,000 iterations) + AES-256-GCM and isolated behind owner-only
+  RLS (`user_id = auth.uid()`).
+- **Unauthorized database access, tampering, and storage exhaustion.** Row-level
+  security restricts profiles, vaults, conversations, memberships, wrapped keys,
+  messages, and call signals. Clients have zero `UPDATE` or `DELETE` grants on
+  `public.messages`; an immutability trigger rejects edits or manual deletions,
+  and cleanup occurs strictly 2 minutes after the recipient sees the message (or
+  after 14 days if abandoned). Free-tier storage is protected by a 256 KB per-file
+  cap, a 4 MB per-sender unseen cap, a 200-unseen-message cap per conversation,
+  and a 10-message text-only cap on pending message requests.
 - **Realtime eavesdropping.** Private Realtime channels authorize reads and
-  writes through RLS on `realtime.messages`. Broadcast payloads are encrypted
-  regardless, so a broker cannot read content.
-- **Message tampering, spoofing, and replay.** Every message, file chunk, and
-  call envelope is signed with ECDSA P-256 and bound to its conversation, sender,
-  message/call ID, and timestamp. Receivers verify the signature against the
-  sender's profile key, enforce freshness windows, and track seen envelope IDs
-  to drop replayed packets.
-- **Cross-conversation replay.** Encryption uses AES-GCM additional authenticated
-  data containing the conversation ID, sender, and message context.
-- **Cross-account key bleed and raw key export.** Device private keys are
-  generated as non-extractable WebCrypto `CryptoKey` handles (`extractable: false`)
-  and stored per user ID in IndexedDB (`v2:<user-id>`), preventing raw JWK export
-  and isolating multiple accounts on a shared browser.
-- **Malicious attachment handling.** Only JPEG, PNG, WebP, GIF, PDF, and plain
-  text are accepted; the browser verifies magic bytes and UTF-8 validity. Files
-  are limited to 2 MB, encrypted client-side, and served from in-memory Blob
-  URLs that are revoked at expiry.
+  writes through RLS on `realtime.messages`. Broadcast and fallback call-signal
+  envelopes are end-to-end encrypted and signed regardless.
+- **Message tampering, spoofing, and replay.** Every stored and live message and
+  call envelope is signed with ECDSA P-256 and bound via AES-GCM AAD to its
+  conversation, sender, message/call ID, and timestamp. Receivers verify the
+  signature against the sender's profile key before rendering.
+- **Cross-account key bleed and multi-day logout loss.** Active session private
+  keys are re-imported into IndexedDB (`v2:<user-id>`) as non-extractable WebCrypto
+  `CryptoKey` handles (`extractable: false`), while cross-session persistence across
+  logouts is handled exclusively via the owner-isolated PBKDF2 + AES-256-GCM vault.
+- **Malicious attachment handling.** Only JPEG, PNG, WebP, GIF, MP4, WebM, PDF,
+  and plain text under 256 KB are accepted; the browser verifies magic bytes and
+  UTF-8 validity and compresses photos client-side before encryption.
 - **Phishing links.** Links open through an interstitial with `noopener`,
   `noreferrer`, and `nofollow`. Plaintext HTTP, hidden credentials, raw IP
   hosts, punycode, and suspicious subdomains are flagged or blocked.
-- **Weak account creation.** Email confirmation, disposable-domain rejection,
-  reserved usernames, immutable usernames, and a 10-character password policy
-  are enforced. Phone auth is not used.
+- **Fake or bot account creation.** Email verification, trusted-provider and
+  academic/government domain enforcement, disposable-domain blocking, `+` alias
+  rejection, canonical Gmail dot-stripping deduplication, 30-minute unconfirmed
+  account pruning, strict `^[a-z0-9]{3,10}$` immutable usernames, and a
+  10-character password policy are enforced at both client and database layers.
 - **Clickjacking and script injection.** The deployment sends CSP, HSTS,
   `X-Frame-Options: DENY`, `nosniff`, and a restrictive `Permissions-Policy`.
   React renders text as text; no `dangerouslySetInnerHTML` is used and there are

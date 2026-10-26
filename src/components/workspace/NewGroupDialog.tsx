@@ -3,7 +3,7 @@ import { Loader2, Plus, Search, Users, X } from 'lucide-react';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import { searchPeople } from '../../lib/data';
-import { groupTitleSchema } from '../../lib/validation';
+import { groupTitleSchema, sanitizeUsernameInput } from '../../lib/validation';
 import type { PeopleResult } from '../../types';
 import { Avatar } from '../ui/Avatar';
 import { Modal } from '../ui/Modal';
@@ -59,7 +59,7 @@ export function NewGroupDialog({
         .finally(() => {
           if (requestId.current === id) setSearching(false);
         });
-    }, 280);
+    }, 240);
     return () => window.clearTimeout(timer);
   }, [open, query, selected]);
 
@@ -88,7 +88,7 @@ export function NewGroupDialog({
     setCreating(true);
     try {
       const id = await createGroupChat(parsed.data, selected);
-      toast('Group created. Messages and files are still ephemeral.', 'success');
+      toast('Group created.', 'success');
       onCreated(id);
       onClose();
     } catch (caught) {
@@ -105,7 +105,7 @@ export function NewGroupDialog({
         if (!creating) onClose();
       }}
       title="Create a group"
-      description="Up to 50 people. Every member receives the conversation key on this device."
+      description="Up to 50 verified people with end-to-end group encryption."
       size="medium"
       footer={
         <>
@@ -140,8 +140,7 @@ export function NewGroupDialog({
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Weekend plans"
-            maxLength={64}
-            autoFocus
+            maxLength={48}
           />
         </label>
 
@@ -151,10 +150,13 @@ export function NewGroupDialog({
             <Search size={16} aria-hidden="true" />
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search people"
+              onChange={(event) =>
+                setQuery(sanitizeUsernameInput(event.target.value.replace(/^@/, '')))
+              }
+              placeholder="Search @username"
               autoComplete="off"
-              maxLength={40}
+              autoCapitalize="none"
+              maxLength={10}
             />
             {searching ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
           </span>
@@ -164,7 +166,12 @@ export function NewGroupDialog({
           <div className="selected-people" aria-label="Selected people">
             {selected.map((person) => (
               <span className="person-chip" key={person.id}>
-                <Avatar name={person.display_name} seed={person.id} size="small" />
+                <Avatar
+                  name={person.display_name}
+                  seed={person.id}
+                  avatarId={person.avatar_id}
+                  size="small"
+                />
                 <span>{person.display_name}</span>
                 <button
                   type="button"
@@ -189,7 +196,12 @@ export function NewGroupDialog({
                 key={person.id}
                 onClick={() => addPerson(person)}
               >
-                <Avatar name={person.display_name} seed={person.id} size="small" />
+                <Avatar
+                  name={person.display_name}
+                  seed={person.id}
+                  avatarId={person.avatar_id}
+                  size="small"
+                />
                 <span>
                   <strong>{person.display_name}</strong>
                   <small>@{person.username}</small>

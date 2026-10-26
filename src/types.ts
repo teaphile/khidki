@@ -1,12 +1,4 @@
-export type Jwk = {
-  kty: string;
-  crv?: string;
-  x?: string;
-  y?: string;
-  d?: string;
-  [key: string]: unknown;
-};
-
+export type Jwk = JsonWebKey;
 export type PrivateKeyMaterial = CryptoKey | Jwk;
 
 export type PublicKeyBundle = {
@@ -15,51 +7,102 @@ export type PublicKeyBundle = {
   sig: Jwk;
 };
 
+export type KeyVault = {
+  v: 1;
+  salt: string;
+  iv: string;
+  ct: string;
+  iter: number;
+};
+
 export type Identity = {
   v: 1 | 2;
-  ecdh: { publicKey: Jwk; privateKey: PrivateKeyMaterial };
-  sig: { publicKey: Jwk; privateKey: PrivateKeyMaterial };
+  createdAt?: number;
+  ecdh: {
+    publicKey: Jwk;
+    privateKey: PrivateKeyMaterial;
+  };
+  sig: {
+    publicKey: Jwk;
+    privateKey: PrivateKeyMaterial;
+  };
 };
+
+export const AVATAR_IDS = [
+  'initials',
+  'fox',
+  'owl',
+  'cat',
+  'wolf',
+  'panda',
+  'crown',
+  'bolt',
+  'flame',
+  'moon',
+  'star',
+  'lotus',
+  'gem',
+  'wave',
+  'shield',
+  'music',
+  'rocket',
+] as const;
+
+export type AvatarId = (typeof AVATAR_IDS)[number];
 
 export type Profile = {
   id: string;
   username: string;
   display_name: string;
+  avatar_id: AvatarId;
   public_key: PublicKeyBundle | null;
+  key_vault: KeyVault | null;
   created_at: string;
 };
 
-export type ConversationRole = 'admin' | 'member';
+export type PeopleResult = {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar_id: AvatarId;
+  public_key: PublicKeyBundle | null;
+};
+
+export type ConversationKind = 'dm' | 'group';
+export type MemberRole = 'admin' | 'member';
+export type RequestStatus = 'pending' | 'accepted';
 
 export type ConversationMember = {
   userId: string;
-  role: ConversationRole;
   username: string;
   displayName: string;
+  avatarId: AvatarId;
   publicKey: PublicKeyBundle | null;
+  role: MemberRole;
 };
 
 export type Conversation = {
   id: string;
-  kind: 'dm' | 'group';
+  kind: ConversationKind;
   title: string;
   createdBy: string | null;
   createdAt: string;
+  lastMessageAt: string;
+  requestStatus: RequestStatus;
+  requestedBy: string | null;
   members: ConversationMember[];
 };
 
-export type Attachment = {
-  id: string;
+export type AttachmentPayload = {
+  id?: string;
   name: string;
   mime: string;
   size: number;
   url?: string;
   progress?: number;
-  width?: number;
-  height?: number;
 };
 
-export type MessageStatus = 'sending' | 'sent' | 'receiving';
+export type MessageStatus = 'sending' | 'receiving' | 'sent' | 'seen' | 'failed';
 
 export type ChatMessage = {
   id: string;
@@ -68,21 +111,46 @@ export type ChatMessage = {
   senderName: string;
   kind: 'text' | 'file';
   text?: string;
-  attachment?: Attachment;
+  attachment?: AttachmentPayload;
   createdAt: number;
-  expiresAt: number;
-  status: MessageStatus;
+  seenAt: number | null;
+  expiresAt: number | null;
   mine: boolean;
+  status: MessageStatus;
 };
 
-export type PeopleResult = {
+export type StoredMessageRow = {
   id: string;
-  username: string;
-  display_name: string;
-  public_key: PublicKeyBundle;
+  conversation_id: string;
+  sender_id: string;
+  kind: 'text' | 'file';
+  iv: string;
+  ciphertext: string;
+  sig: string;
+  byte_size: number;
+  client_created_at: number;
+  created_at: string;
+  seen_at: string | null;
+  expires_at: string | null;
 };
 
-export type CallStatus = 'idle' | 'outgoing' | 'incoming' | 'connecting' | 'active' | 'ended';
+export type CallSignalRow = {
+  id: string;
+  call_id: string;
+  conversation_id: string;
+  sender_id: string;
+  recipient_id: string;
+  event: string;
+  envelope: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AppView = 'chats' | 'requests' | 'people';
+
+export type ThemeMode = 'light' | 'dark' | 'system';
+export type ResolvedTheme = 'light' | 'dark';
+
+export type CallStatus = 'idle' | 'outgoing' | 'incoming' | 'connecting' | 'active';
 
 export type CallState = {
   status: CallStatus;
@@ -90,11 +158,8 @@ export type CallState = {
   conversationId: string | null;
   peerId: string | null;
   peerName: string;
+  peerAvatarId: AvatarId;
   video: boolean;
   startedAt: number | null;
   error: string | null;
 };
-
-export type AppView = 'chats' | 'people';
-export type ThemeMode = 'system' | 'light' | 'dark';
-export type ResolvedTheme = 'light' | 'dark';

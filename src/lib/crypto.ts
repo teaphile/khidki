@@ -1,8 +1,11 @@
 import { z } from 'zod';
-import type { Identity, Jwk, PrivateKeyMaterial, PublicKeyBundle } from '../types';
+import type { Identity, Jwk, KeyVault, PrivateKeyMaterial, PublicKeyBundle } from '../types';
 
 const subtle = globalThis.crypto.subtle;
 const encoder = new TextEncoder();
+
+const VAULT_ITERATIONS = 210_000;
+const VAULT_AAD = 'sotto-key-vault-v1';
 
 type Bytes = Uint8Array<ArrayBuffer>;
 
@@ -21,6 +24,16 @@ const publicEcJwkSchema = z
   })
   .strict();
 
+const privateEcJwkSchema = z
+  .object({
+    kty: z.literal('EC'),
+    crv: z.literal('P-256'),
+    x: coordSchema,
+    y: coordSchema,
+    d: coordSchema,
+  })
+  .passthrough();
+
 export const publicKeyBundleSchema: z.ZodType<PublicKeyBundle> = z
   .object({
     v: z.literal(1),
@@ -28,6 +41,29 @@ export const publicKeyBundleSchema: z.ZodType<PublicKeyBundle> = z
     sig: publicEcJwkSchema,
   })
   .strict();
+
+export const keyVaultSchema: z.ZodType<KeyVault> = z
+  .object({
+    v: z.literal(1),
+    salt: z.string().min(16).max(64),
+    iv: z.string().min(12).max(48),
+    ct: z.string().min(64).max(3600),
+    iter: z.number().int().min(100_000).max(600_000),
+  })
+  .strict();
+
+const vaultPlainSchema = z.object({
+  v: z.literal(1),
+  createdAt: z.number().int().nonnegative(),
+  ecdh: z.object({
+    publicKey: publicEcJwkSchema,
+    privateKey: privateEcJwkSchema,
+  }),
+  sig: z.object({
+    publicKey: publicEcJwkSchema,
+    privateKey: privateEcJwkSchema,
+  }),
+});
 
 export function parsePublicKeyBundle(value: unknown): PublicKeyBundle | null {
   if (!value || typeof value !== 'object') return null;
@@ -48,6 +84,12 @@ export function parsePublicKeyBundle(value: unknown): PublicKeyBundle | null {
     sig: { kty: sig.kty, crv: sig.crv, x: sig.x, y: sig.y },
   };
   const parsed = publicKeyBundleSchema.safeParse(normalized);
+  return parsed.success ? parsed.data : null;
+}
+
+export function parseKeyVault(value: unknown): KeyVault | null {
+  if (!value || typeof value !== 'object') return null;
+  const parsed = keyVaultSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
@@ -164,13 +206,14 @@ export async function generateIdentity(): Promise<Identity> {
 
   return {
     v: 1,
+    createdAt: Date.now(),
     ecdh: {
       publicKey: { kty: 'EC', crv: 'P-256', x: ecdhPub.x, y: ecdhPub.y },
-      privateKey: (await subtle.exportKey('jwk', ecdh.privateKey)) as Jwk,
+      privateKey: sanitizePrivateJwk((await subtle.exportKey('jwk', ecdh.privateKey)) as Jwk),
     },
     sig: {
       publicKey: { kty: 'EC', crv: 'P-256', x: sigPub.x, y: sigPub.y },
-      privateKey: (await subtle.exportKey('jwk', sig.privateKey)) as Jwk,
+      privateKey: sanitizePrivateJwk((await subtle.exportKey('jwk', sig.privateKey)) as Jwk),
     },
   };
 }
@@ -193,6 +236,7 @@ export async function generateDeviceIdentity(): Promise<Identity> {
 
   return {
     v: 2,
+    createdAt: Date.now(),
     ecdh: {
       publicKey: { kty: 'EC', crv: 'P-256', x: ecdhPub.x, y: ecdhPub.y },
       privateKey: ecdh.privateKey,
@@ -217,6 +261,7 @@ export async function sealIdentity(identity: Identity): Promise<Identity> {
   const sigPrivate = await resolveSignPrivate(identity.sig.privateKey);
   return {
     v: 2,
+    createdAt: identity.createdAt || Date.now(),
     ecdh: {
       publicKey: {
         kty: 'EC',
@@ -234,6 +279,92 @@ export async function sealIdentity(identity: Identity): Promise<Identity> {
         y: identity.sig.publicKey.y,
       },
       privateKey: sigPrivate,
+    },
+  };
+}
+
+async function deriveVaultKey(
+  password: string,
+  salt: Bytes,
+  iterations: number,
+): Promise<CryptoKey> {
+  const baseKey = await subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, [
+    'deriveKey',
+  ]);
+  return subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt,
+      iterations,
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+/**
+ * Wraps an exportable JWK identity with the user's password via PBKDF2-SHA256 + AES-256-GCM
+ * so logging out for days or signing in after mobile email confirmation restores exact E2EE keys.
+ */
+export async function encryptKeyVault(identity: Identity, password: string): Promise<KeyVault> {
+  if (isCryptoKey(identity.ecdh.privateKey) || isCryptoKey(identity.sig.privateKey)) {
+    throw new Error('Cannot export a sealed device identity into a key vault.');
+  }
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveVaultKey(password, salt, VAULT_ITERATIONS);
+  const payload = {
+    v: 1 as const,
+    createdAt: identity.createdAt || Date.now(),
+    ecdh: {
+      publicKey: sanitizePublicJwk(identity.ecdh.publicKey),
+      privateKey: sanitizePrivateJwk(identity.ecdh.privateKey),
+    },
+    sig: {
+      publicKey: sanitizePublicJwk(identity.sig.publicKey),
+      privateKey: sanitizePrivateJwk(identity.sig.privateKey),
+    },
+  };
+  const ct = await subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: encoder.encode(VAULT_AAD) },
+    key,
+    encoder.encode(JSON.stringify(payload)),
+  );
+  return {
+    v: 1,
+    salt: b64.encode(salt),
+    iv: b64.encode(iv),
+    ct: b64.encode(new Uint8Array(ct)),
+    iter: VAULT_ITERATIONS,
+  };
+}
+
+export async function decryptKeyVault(vault: KeyVault, password: string): Promise<Identity> {
+  const parsedVault = keyVaultSchema.parse(vault);
+  const key = await deriveVaultKey(password, b64.decode(parsedVault.salt), parsedVault.iter);
+  const plaintext = await subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: b64.decode(parsedVault.iv),
+      additionalData: encoder.encode(VAULT_AAD),
+    },
+    key,
+    b64.decode(parsedVault.ct),
+  );
+  const decoded = vaultPlainSchema.parse(JSON.parse(new TextDecoder().decode(plaintext)));
+  return {
+    v: 1,
+    createdAt: decoded.createdAt,
+    ecdh: {
+      publicKey: decoded.ecdh.publicKey,
+      privateKey: sanitizePrivateJwk(decoded.ecdh.privateKey),
+    },
+    sig: {
+      publicKey: decoded.sig.publicKey,
+      privateKey: sanitizePrivateJwk(decoded.sig.privateKey),
     },
   };
 }

@@ -1,112 +1,177 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  Check,
+  Clock3,
   Info,
+  Loader2,
   Lock,
-  MessageCircle,
+  MessageSquare,
   Phone,
   ShieldCheck,
-  Timer,
+  UserPlus,
+  Users,
   Video,
-  WifiOff,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCall } from '../../context/CallContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
-import { conversationHandle, conversationSeed, conversationTitle } from '../../lib/format';
-import type { Conversation } from '../../types';
+import {
+  conversationAvatarId,
+  conversationHandle,
+  conversationSeed,
+  conversationTitle,
+  dmPeer,
+} from '../../lib/format';
 import type { LinkAssessment } from '../../lib/links';
 import { Avatar } from '../ui/Avatar';
+import { LogoMark } from '../ui/LogoMark';
 import { Composer } from './Composer';
+import { LinkDialog } from './LinkDialog';
 import { MessageBubble } from './MessageBubble';
 
 export function ConversationView({
-  conversation,
   onBack,
   onOpenInfo,
-  onOpenLink,
+  onOpenPeople,
+  onOpenNewGroup,
 }: {
-  conversation: Conversation;
   onBack: () => void;
   onOpenInfo: () => void;
-  onOpenLink: (link: LinkAssessment) => void;
+  onOpenPeople: () => void;
+  onOpenNewGroup: () => void;
 }) {
   const { profile } = useAuth();
-  const { messages, connection, sendText, sendFile } = useChat();
+  const { activeConversation, messages, acceptRequest, declineRequest } = useChat();
   const { startCall } = useCall();
   const { toast } = useToast();
+  const [linkToConfirm, setLinkToConfirm] = useState<LinkAssessment | null>(null);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const myId = profile?.id ?? '';
-  const title = conversationTitle(conversation, myId);
-  const list = messages[conversation.id] ?? [];
-  const listRef = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
+
+  const list = useMemo(
+    () => (activeConversation ? (messages[activeConversation.id] ?? []) : []),
+    [activeConversation, messages],
+  );
 
   useEffect(() => {
-    stickToBottom.current = true;
-    const element = listRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [conversation.id]);
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [activeConversation?.id, list.length]);
 
-  useEffect(() => {
-    const element = listRef.current;
-    if (!element || !stickToBottom.current) return;
-    element.scrollTop = element.scrollHeight;
-  }, [list.length]);
+  if (!activeConversation) {
+    return (
+      <section className="stage-empty" aria-label="No conversation selected">
+        <LogoMark size={46} />
+        <span className="eyebrow">Ready when you are</span>
+        <h2>Select a chat or find someone by username</h2>
+        <p>
+          Messages stay encrypted while your contact is offline and automatically self-clean two
+          minutes after being seen. Nothing can be edited or deleted manually.
+        </p>
+        <div className="stage-empty__actions">
+          <button type="button" className="button button--primary" onClick={onOpenPeople}>
+            <UserPlus size={17} aria-hidden="true" /> Find people
+          </button>
+          <button type="button" className="button button--secondary" onClick={onOpenNewGroup}>
+            <Users size={17} aria-hidden="true" /> Create a group
+          </button>
+        </div>
+      </section>
+    );
+  }
 
-  const beginCall = async (video: boolean) => {
+  const title = conversationTitle(activeConversation, myId);
+  const handle = conversationHandle(activeConversation, myId);
+  const peer = dmPeer(activeConversation, myId);
+  const isPending =
+    activeConversation.kind === 'dm' && activeConversation.requestStatus === 'pending';
+  const isIncomingPending =
+    isPending && activeConversation.requestedBy !== null && activeConversation.requestedBy !== myId;
+  const isOutgoingPending = isPending && activeConversation.requestedBy === myId;
+  const canCall = activeConversation.kind === 'dm' && Boolean(peer) && !isPending;
+
+  const handleAccept = async () => {
+    setRequestBusy(true);
     try {
-      await startCall(conversation, video);
+      await acceptRequest(activeConversation.id);
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'Unable to start the call.', 'error');
+      toast(error instanceof Error ? error.message : 'Unable to accept request.', 'error');
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  const handleDecline = async () => {
+    setRequestBusy(true);
+    try {
+      await declineRequest(activeConversation.id);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Unable to remove request.', 'error');
+    } finally {
+      setRequestBusy(false);
     }
   };
 
   return (
-    <section className="conversation-view" aria-label={`Conversation with ${title}`}>
-      <header className="conversation-header">
+    <section className="conversation" aria-label={`Conversation with ${title}`}>
+      <header className="conversation__header">
         <button
           type="button"
-          className="icon-button conversation-header__back"
+          className="icon-button mobile-only"
           onClick={onBack}
           aria-label="Back to conversations"
         >
           <ArrowLeft size={20} aria-hidden="true" />
         </button>
-        <Avatar
-          name={title}
-          seed={conversationSeed(conversation, myId)}
-          group={conversation.kind === 'group'}
-          size="small"
-        />
-        <div className="conversation-header__identity">
-          <strong>{title}</strong>
-          <span>{conversationHandle(conversation, myId)}</span>
-        </div>
-        <div className="conversation-header__security">
-          <Lock size={13} aria-hidden="true" />
-          <span>End-to-end encrypted</span>
-        </div>
-        <div className="conversation-header__actions">
-          {conversation.kind === 'dm' ? (
+
+        <button
+          type="button"
+          className="conversation__identity"
+          onClick={onOpenInfo}
+          aria-label={`Details for ${title}`}
+        >
+          <Avatar
+            name={title}
+            seed={conversationSeed(activeConversation, myId)}
+            avatarId={conversationAvatarId(activeConversation, myId)}
+            group={activeConversation.kind === 'group'}
+          />
+          <span className="conversation__titles">
+            <strong className="truncate">{title}</strong>
+            <span className="truncate">{handle}</span>
+          </span>
+        </button>
+
+        <div className="conversation__tools">
+          <span className="encryption-badge" title="End-to-end encrypted in your browser">
+            <Lock size={13} aria-hidden="true" /> Encrypted
+          </span>
+          {activeConversation.kind === 'dm' ? (
             <>
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => void beginCall(false)}
-                aria-label={`Start an audio call with ${title}`}
-                title="Audio call"
+                onClick={() => void startCall(activeConversation, false)}
+                disabled={!canCall}
+                aria-label={`Audio call ${title}`}
+                title={canCall ? 'Audio call' : 'Calls unlock after request is accepted'}
               >
-                <Phone size={19} aria-hidden="true" />
+                <Phone size={18} aria-hidden="true" />
               </button>
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => void beginCall(true)}
-                aria-label={`Start a video call with ${title}`}
-                title="Video call"
+                onClick={() => void startCall(activeConversation, true)}
+                disabled={!canCall}
+                aria-label={`Video call ${title}`}
+                title={canCall ? 'Video call' : 'Calls unlock after request is accepted'}
               >
-                <Video size={20} aria-hidden="true" />
+                <Video size={19} aria-hidden="true" />
               </button>
             </>
           ) : null}
@@ -115,74 +180,45 @@ export function ConversationView({
             className="icon-button"
             onClick={onOpenInfo}
             aria-label="Conversation details"
-            title="Conversation details"
+            title="Details"
           >
             <Info size={19} aria-hidden="true" />
           </button>
         </div>
       </header>
 
-      {connection !== 'connected' ? (
-        <div
-          className={`connection-banner${connection === 'offline' ? ' connection-banner--error' : ''}`}
-        >
-          {connection === 'offline' ? (
-            <WifiOff size={15} aria-hidden="true" />
-          ) : (
-            <span className="status-dot" data-state="connecting" aria-hidden="true" />
-          )}
-          {connection === 'offline'
-            ? 'You are offline. New messages cannot be delivered.'
-            : 'Reconnecting to secure realtime…'}
+      <div className="conversation__stream" ref={scrollRef}>
+        <div className="ephemeral-banner">
+          <Clock3 size={15} aria-hidden="true" />
+          <span>
+            Unseen messages wait safely across logouts. Once seen, every message self-cleans in 2
+            minutes and cannot be edited or deleted manually.
+          </span>
         </div>
-      ) : null}
 
-      <div
-        className="message-scroll"
-        ref={listRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          stickToBottom.current =
-            element.scrollHeight - element.scrollTop - element.clientHeight < 90;
-        }}
-      >
         {!list.length ? (
-          <div className="conversation-empty">
-            <span className="conversation-empty__mark">
-              <MessageCircle size={26} aria-hidden="true" />
-            </span>
-            <span className="eyebrow">A clean slate</span>
-            <h2>Say what matters, then let it go.</h2>
+          <div className="stream-empty">
+            <MessageSquare size={22} aria-hidden="true" />
             <p>
-              Messages and files are encrypted in your browser and disappear two minutes after they
-              are sent. Nothing is stored for later.
+              {isOutgoingPending
+                ? `Send your first message to ${title}. They will receive a message request in their inbox.`
+                : 'No active messages right now. Say hello below.'}
             </p>
-            <div className="conversation-empty__rules">
-              <span>
-                <Timer size={16} aria-hidden="true" /> 2-minute lifetime
-              </span>
-              <span>
-                <ShieldCheck size={16} aria-hidden="true" /> Browser-held keys
-              </span>
-              <span>
-                <Lock size={16} aria-hidden="true" /> No archive
-              </span>
-            </div>
           </div>
         ) : (
-          <div className="message-stack">
+          <div className="message-list">
             {list.map((message, index) => {
               const previous = list[index - 1];
               const showSender =
-                conversation.kind === 'group' &&
+                activeConversation.kind === 'group' &&
                 !message.mine &&
-                (!previous || previous.senderId !== message.senderId);
+                previous?.senderId !== message.senderId;
               return (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   showSender={showSender}
-                  onOpenLink={onOpenLink}
+                  onOpenLink={setLinkToConfirm}
                 />
               );
             })}
@@ -190,7 +226,65 @@ export function ConversationView({
         )}
       </div>
 
-      <Composer onSendText={sendText} onSendFile={sendFile} />
+      {isIncomingPending ? (
+        <div className="request-gate" role="region" aria-label="Message request actions">
+          <div className="request-gate__copy">
+            <ShieldCheck size={18} aria-hidden="true" />
+            <div>
+              <strong>Message request from {title}</strong>
+              <p>
+                Accept to reply, share photos, and unlock audio or video calls. Decline removes this
+                request and all queued messages immediately.
+              </p>
+            </div>
+          </div>
+          <div className="request-gate__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={requestBusy}
+              onClick={() => void handleAccept()}
+            >
+              {requestBusy ? (
+                <Loader2 className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <Check size={16} aria-hidden="true" />
+              )}
+              Accept request
+            </button>
+            <button
+              type="button"
+              className="button button--secondary"
+              disabled={requestBusy}
+              onClick={() => void handleDecline()}
+            >
+              <X size={16} aria-hidden="true" /> Decline
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {isOutgoingPending ? (
+            <div className="outgoing-request-bar">
+              <span>
+                Message request sent to <strong>{handle}</strong>. File sharing and calls unlock
+                once accepted.
+              </span>
+              <button
+                type="button"
+                className="text-button text-button--danger"
+                disabled={requestBusy}
+                onClick={() => void handleDecline()}
+              >
+                Cancel request
+              </button>
+            </div>
+          ) : null}
+          <Composer allowAttachments={!isPending} />
+        </>
+      )}
+
+      <LinkDialog link={linkToConfirm} onClose={() => setLinkToConfirm(null)} />
     </section>
   );
 }

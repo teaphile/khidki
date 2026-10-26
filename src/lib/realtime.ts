@@ -4,82 +4,102 @@ import { requireSupabase } from './env';
 type OutboundEntry = {
   channel: RealtimeChannel;
   ready: Promise<RealtimeChannel>;
-  idleTimer: number | null;
+  failed: boolean;
+  lastUsed: number;
 };
 
-const IDLE_TTL_MS = 90_000;
+const MAX_OUTBOUND_CHANNELS = 24;
+const IDLE_EVICT_MS = 120_000;
+const SUBSCRIBE_TIMEOUT_MS = 7_000;
+
 const outbound = new Map<string, OutboundEntry>();
-let activeSelfUserId: string | null = null;
+let selfUserId: string | null = null;
 
 export function setRealtimeSelfUserId(userId: string | null): void {
-  activeSelfUserId = userId;
+  selfUserId = userId;
 }
 
-function waitForJoin(channel: RealtimeChannel, timeoutMs = 8_000): Promise<RealtimeChannel> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error('The realtime connection timed out.'));
-    }, timeoutMs);
-
-    channel.subscribe((status) => {
-      if (settled) return;
-      if (status === 'SUBSCRIBED') {
-        settled = true;
-        window.clearTimeout(timer);
-        resolve(channel);
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        settled = true;
-        window.clearTimeout(timer);
-        reject(new Error('Unable to reach the realtime service.'));
-      }
-    });
-  });
-}
-
-function scheduleEviction(userId: string, entry: OutboundEntry): void {
-  if (entry.idleTimer !== null) window.clearTimeout(entry.idleTimer);
-  entry.idleTimer = window.setTimeout(() => {
-    const current = outbound.get(userId);
-    if (current !== entry) return;
-    outbound.delete(userId);
-    void requireSupabase().removeChannel(entry.channel);
-  }, IDLE_TTL_MS);
-}
-
-async function outboundChannel(userId: string): Promise<RealtimeChannel> {
-  const existing = outbound.get(userId);
-  if (existing) {
-    const state = existing.channel.state;
-    if (state === 'joined' || state === 'joining') {
-      scheduleEviction(userId, existing);
-      return existing.ready;
+function pruneOutbound(now: number): void {
+  const client = requireSupabase();
+  for (const [topic, entry] of outbound) {
+    if (entry.failed || now - entry.lastUsed > IDLE_EVICT_MS) {
+      outbound.delete(topic);
+      void client.removeChannel(entry.channel);
     }
-    if (existing.idleTimer !== null) window.clearTimeout(existing.idleTimer);
-    outbound.delete(userId);
-    await requireSupabase().removeChannel(existing.channel);
+  }
+  while (outbound.size >= MAX_OUTBOUND_CHANNELS) {
+    let oldestTopic: string | null = null;
+    let oldestTime = Infinity;
+    for (const [topic, entry] of outbound) {
+      if (entry.lastUsed < oldestTime) {
+        oldestTime = entry.lastUsed;
+        oldestTopic = topic;
+      }
+    }
+    if (!oldestTopic) break;
+    const evicted = outbound.get(oldestTopic);
+    outbound.delete(oldestTopic);
+    if (evicted) void client.removeChannel(evicted.channel);
+  }
+}
+
+async function outboundChannel(topic: string): Promise<RealtimeChannel> {
+  const now = Date.now();
+  const existing = outbound.get(topic);
+  if (
+    existing &&
+    !existing.failed &&
+    existing.channel.state !== 'errored' &&
+    existing.channel.state !== 'leaving'
+  ) {
+    existing.lastUsed = now;
+    return existing.ready;
   }
 
-  const channel = requireSupabase().channel(`user:${userId}`, {
+  const client = requireSupabase();
+  if (existing) {
+    outbound.delete(topic);
+    void client.removeChannel(existing.channel);
+  }
+
+  pruneOutbound(now);
+
+  const channel = client.channel(topic, {
     config: { private: true, broadcast: { self: false, ack: true } },
   });
 
-  const ready = waitForJoin(channel).catch(async (error) => {
-    const current = outbound.get(userId);
-    if (current?.channel === channel) {
-      if (current.idleTimer !== null) window.clearTimeout(current.idleTimer);
-      outbound.delete(userId);
-    }
-    await requireSupabase().removeChannel(channel);
-    throw error;
+  const entry: OutboundEntry = {
+    channel,
+    failed: false,
+    lastUsed: now,
+    ready: Promise.resolve(channel),
+  };
+
+  entry.ready = new Promise<RealtimeChannel>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      entry.failed = true;
+      outbound.delete(topic);
+      void client.removeChannel(channel);
+      reject(new Error('Realtime channel timed out.'));
+    }, SUBSCRIBE_TIMEOUT_MS);
+
+    channel.subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        window.clearTimeout(timer);
+        resolve(channel);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        window.clearTimeout(timer);
+        entry.failed = true;
+        if (outbound.get(topic) === entry) {
+          outbound.delete(topic);
+        }
+        reject(err ?? new Error(`Realtime channel ${status.toLowerCase()}.`));
+      }
+    });
   });
 
-  const entry: OutboundEntry = { channel, ready, idleTimer: null };
-  outbound.set(userId, entry);
-  scheduleEviction(userId, entry);
-  return ready;
+  outbound.set(topic, entry);
+  return entry.ready;
 }
 
 export async function sendUserEvent(
@@ -87,20 +107,23 @@ export async function sendUserEvent(
   event: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  // Never open an outbound channel to our own user topic; doing so would
-  // collide with our inbound inbox subscription on the same Realtime client.
-  if (!userId || userId === activeSelfUserId) return;
-
-  const channel = await outboundChannel(userId);
+  if (!userId || userId === selfUserId) return;
+  const topic = `user:${userId}`;
+  const channel = await outboundChannel(topic);
   const result = await channel.send({ type: 'broadcast', event, payload });
-  if (result !== 'ok') throw new Error('The realtime service did not accept the event.');
+  if (result !== 'ok') {
+    const failedEntry = outbound.get(topic);
+    if (failedEntry?.channel === channel) {
+      outbound.delete(topic);
+      void requireSupabase().removeChannel(channel);
+    }
+    throw new Error('Realtime signal delivery failed.');
+  }
 }
 
 export async function closeOutboundChannels(): Promise<void> {
-  const entries = [...outbound.values()];
+  const client = requireSupabase();
+  const entries = Array.from(outbound.values());
   outbound.clear();
-  for (const entry of entries) {
-    if (entry.idleTimer !== null) window.clearTimeout(entry.idleTimer);
-  }
-  await Promise.allSettled(entries.map((entry) => requireSupabase().removeChannel(entry.channel)));
+  await Promise.all(entries.map((entry) => client.removeChannel(entry.channel)));
 }

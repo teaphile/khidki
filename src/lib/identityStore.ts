@@ -1,5 +1,7 @@
-import type { Identity, PrivateKeyMaterial, PublicKeyBundle } from '../types';
+import type { Identity, KeyVault, PrivateKeyMaterial, PublicKeyBundle } from '../types';
 import {
+  decryptKeyVault,
+  encryptKeyVault,
   generateDeviceIdentity,
   generateIdentity,
   publicBundle,
@@ -114,30 +116,47 @@ async function deleteSlot(slot: string): Promise<void> {
   }
 }
 
-async function createBestIdentity(): Promise<Identity> {
+async function canStoreSealedKeys(): Promise<boolean> {
+  if (typeof indexedDB === 'undefined') return true;
   try {
     const sealed = await generateDeviceIdentity();
-    if (typeof indexedDB !== 'undefined') {
-      const probeSlot = '__probe__';
-      const db = await openDb();
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).put(sealed, probeSlot);
-        tx.objectStore(STORE).delete(probeSlot);
-        tx.oncomplete = () => {
-          db.close();
-          resolve();
-        };
-        tx.onerror = () => {
-          db.close();
-          reject(tx.error);
-        };
-      });
-    }
-    return sealed;
+    const probeSlot = '__probe__';
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(sealed, probeSlot);
+      tx.objectStore(STORE).delete(probeSlot);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+    return true;
   } catch {
-    return generateIdentity();
+    return false;
   }
+}
+
+async function createBestIdentity(): Promise<Identity> {
+  try {
+    if (await canStoreSealedKeys()) {
+      return await generateDeviceIdentity();
+    }
+  } catch {
+    // Fall back to JWK-backed identity if platform IndexedDB rejects CryptoKey clones.
+  }
+  return generateIdentity();
+}
+
+async function maybeSealForStorage(identity: Identity): Promise<Identity> {
+  if (await canStoreSealedKeys()) {
+    return sealIdentity(identity).catch(() => identity);
+  }
+  return identity;
 }
 
 function normalizeEmailSlot(email: string): string {
@@ -155,6 +174,60 @@ export async function stageSignupIdentity(email: string): Promise<Identity> {
 }
 
 /**
+ * Generates an identity for signup, encrypts a password-protected KeyVault for
+ * cloud backup across mobile verification / multi-day sign-outs, and seals the
+ * local IndexedDB copy into non-extractable CryptoKeys.
+ */
+export async function stageSignupIdentityWithVault(
+  email: string,
+  password: string,
+): Promise<{ identity: Identity; vault: KeyVault }> {
+  const exportable = await generateIdentity();
+  const vault = await encryptKeyVault(exportable, password);
+  const stored = await maybeSealForStorage(exportable);
+  await writeSlot(normalizeEmailSlot(email), stored);
+  return { identity: stored, vault };
+}
+
+/**
+ * Generates a fresh rotated identity + encrypted KeyVault when the user changes
+ * their password or resets keys, sealing the local device copy immediately.
+ */
+export async function createVaultedIdentity(
+  userId: string,
+  password: string,
+): Promise<{ identity: Identity; vault: KeyVault }> {
+  const exportable = await generateIdentity();
+  const vault = await encryptKeyVault(exportable, password);
+  const stored = await maybeSealForStorage(exportable);
+  await writeSlot(`${USER_PREFIX}${userId}`, stored);
+  return { identity: stored, vault };
+}
+
+/**
+ * Unlocks a password-wrapped KeyVault and binds the restored identity to `userId`
+ * after verifying it matches `expectedPublicKey` (when provided).
+ */
+export async function restoreIdentityFromVault(
+  userId: string,
+  vault: KeyVault,
+  password: string,
+  expectedPublicKey?: PublicKeyBundle | null,
+): Promise<Identity | null> {
+  try {
+    const unlocked = await decryptKeyVault(vault, password);
+    if (expectedPublicKey && !samePublicKey(publicBundle(unlocked), expectedPublicKey)) {
+      return null;
+    }
+    const stored = await maybeSealForStorage(unlocked);
+    await writeSlot(`${USER_PREFIX}${userId}`, stored);
+    return stored;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Binds a staged signup identity directly to the newly created user ID so no
  * other account on the same browser can ever inherit those keys.
  */
@@ -163,7 +236,7 @@ export async function commitSignupIdentity(
   email: string,
   identity: Identity,
 ): Promise<void> {
-  const sealed = await sealIdentity(identity).catch(() => identity);
+  const sealed = await maybeSealForStorage(identity);
   await writeSlot(`${USER_PREFIX}${userId}`, sealed);
   await deleteSlot(normalizeEmailSlot(email));
 }
@@ -200,9 +273,12 @@ export async function getOrCreateIdentity(
 
   const userSlot = `${USER_PREFIX}${userId}`;
   const existing = await readSlot(userSlot);
-  if (existing) {
+  if (
+    existing &&
+    (!expectedPublicKey || samePublicKey(publicBundle(existing), expectedPublicKey))
+  ) {
     if (existing.v === 1) {
-      const upgraded = await sealIdentity(existing).catch(() => existing);
+      const upgraded = await maybeSealForStorage(existing);
       await writeSlot(userSlot, upgraded);
       return upgraded;
     }
@@ -216,7 +292,7 @@ export async function getOrCreateIdentity(
       pending &&
       (!expectedPublicKey || samePublicKey(publicBundle(pending), expectedPublicKey))
     ) {
-      const upgraded = await sealIdentity(pending).catch(() => pending);
+      const upgraded = await maybeSealForStorage(pending);
       await writeSlot(userSlot, upgraded);
       await deleteSlot(pendingSlot);
       return upgraded;
@@ -226,11 +302,17 @@ export async function getOrCreateIdentity(
   if (expectedPublicKey) {
     const legacy = await readSlot(LEGACY_KEY);
     if (legacy && samePublicKey(publicBundle(legacy), expectedPublicKey)) {
-      const upgraded = await sealIdentity(legacy).catch(() => legacy);
+      const upgraded = await maybeSealForStorage(legacy);
       await writeSlot(userSlot, upgraded);
       await deleteSlot(LEGACY_KEY);
       return upgraded;
     }
+  }
+
+  // If the account has no local matching key and wasn't restored from a vault yet,
+  // reuse existing device key if no server key exists, else create a fresh identity.
+  if (existing && !expectedPublicKey) {
+    return existing;
   }
 
   const fresh = await createBestIdentity();
