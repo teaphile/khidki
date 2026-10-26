@@ -80,7 +80,13 @@ export function MessageBubble({
                 download={attachment.name}
                 aria-label={`Download ${attachment.name}`}
               >
-                <img src={attachment.url} alt={attachment.name} loading="lazy" />
+                <img
+                  src={attachment.url}
+                  alt={attachment.name}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                />
               </a>
             ) : (
               <div className="attachment__file">

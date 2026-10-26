@@ -48,9 +48,10 @@ function AccountProblem() {
 }
 
 function HomePage() {
-  const { loading, user, profile, identity, profileError } = useAuth();
+  const { loading, user, profile, identity, profileError, hadRecoverySession } = useAuth();
 
   if (loading) return <BootSplash />;
+  if (hadRecoverySession && user) return <Navigate to="/reset-password" replace />;
   if (!user) return <AuthPage />;
   if (profileError || !profile || !identity) return <AccountProblem />;
 

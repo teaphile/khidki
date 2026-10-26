@@ -100,6 +100,7 @@ export function sanitizeFileName(name: string): string {
   const cleaned = base
     .replace(/[\p{Cc}]/gu, '')
     .replace(/[^\w.\- ()]/g, '_')
+    .replace(/^\.+/, '')
     .replace(/\s+/g, ' ')
     .trim();
   return (cleaned || 'file').slice(0, 96);

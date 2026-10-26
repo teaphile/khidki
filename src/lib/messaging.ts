@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PublicKeyBundle } from '../types';
+import type { PrivateKeyMaterial, PublicKeyBundle } from '../types';
 import {
   decryptBytes,
   decryptJson,
@@ -113,7 +113,7 @@ export async function encryptTextWire(input: {
   senderId: string;
   text: string;
   createdAt: number;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<MessageWire> {
   const plaintext = textPlainSchema.parse({ text: input.text });
   const aad = messageAad(input.conversationId, input.id, input.senderId, input.createdAt);
@@ -149,7 +149,7 @@ export async function encryptFileMetaWire(input: {
   senderId: string;
   file: FilePlain;
   createdAt: number;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<MessageWire> {
   const plaintext = filePlainSchema.parse(input.file);
   const aad = messageAad(input.conversationId, input.id, input.senderId, input.createdAt);
@@ -186,7 +186,7 @@ export async function encryptChunkWire(input: {
   createdAt: number;
   index: number;
   bytes: Uint8Array<ArrayBuffer>;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<ChunkWire> {
   const aad = chunkAad(
     input.conversationId,

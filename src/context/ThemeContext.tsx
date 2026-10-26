@@ -23,6 +23,7 @@ function readStoredMode(): ThemeMode {
 }
 
 function systemTheme(): ResolvedTheme {
+  if (typeof window.matchMedia !== 'function') return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -31,6 +32,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [systemResolved, setSystemResolved] = useState<ResolvedTheme>(systemTheme);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
     const query = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => setSystemResolved(query.matches ? 'dark' : 'light');
     query.addEventListener('change', onChange);

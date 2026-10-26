@@ -33,19 +33,26 @@ no long-term support branches.
 - **Database or storage compromise.** Message text, captions, file names, and
   file bytes are never written to Postgres or Supabase Storage. A dump of the
   database exposes account and conversation metadata, not content.
-- **Unauthorized database access.** Row-level security restricts profiles,
-  conversations, memberships, and wrapped keys. Clients have no insert or delete
-  grants on conversation tables; membership changes go through
-  `SECURITY DEFINER` RPCs with membership checks.
+- **Unauthorized database access and abuse.** Row-level security restricts
+  profiles, conversations, memberships, and wrapped keys. Clients have no insert
+  or delete grants on conversation tables; membership and discovery go through
+  `SECURITY DEFINER` RPCs guarded by per-user rate limits, confirmed-user checks,
+  and strict P-256 public-key validation (blocking oversized JSON or accidental
+  private scalar uploads).
 - **Realtime eavesdropping.** Private Realtime channels authorize reads and
   writes through RLS on `realtime.messages`. Broadcast payloads are encrypted
   regardless, so a broker cannot read content.
-- **Message tampering and spoofing.** Every message, file chunk, and call
-  envelope is signed with ECDSA P-256 and bound to its conversation, sender,
+- **Message tampering, spoofing, and replay.** Every message, file chunk, and
+  call envelope is signed with ECDSA P-256 and bound to its conversation, sender,
   message/call ID, and timestamp. Receivers verify the signature against the
-  sender's profile key and reject mismatched contexts.
+  sender's profile key, enforce freshness windows, and track seen envelope IDs
+  to drop replayed packets.
 - **Cross-conversation replay.** Encryption uses AES-GCM additional authenticated
   data containing the conversation ID, sender, and message context.
+- **Cross-account key bleed and raw key export.** Device private keys are
+  generated as non-extractable WebCrypto `CryptoKey` handles (`extractable: false`)
+  and stored per user ID in IndexedDB (`v2:<user-id>`), preventing raw JWK export
+  and isolating multiple accounts on a shared browser.
 - **Malicious attachment handling.** Only JPEG, PNG, WebP, GIF, PDF, and plain
   text are accepted; the browser verifies magic bytes and UTF-8 validity. Files
   are limited to 2 MB, encrypted client-side, and served from in-memory Blob
@@ -67,9 +74,11 @@ no long-term support branches.
   names, public keys, conversation membership, conversation titles, timestamps,
   key rotation events, and traffic volume. It cannot see message content.
 - **A compromised browser or device.** Malware, a malicious extension, a shared
-  unlocked device, or injected script can read keys, plaintext, and media. Private
-  keys are stored as JWKs in IndexedDB on the app origin; scripts running on that
-  origin can extract them.
+  unlocked device, or injected script can read plaintext and media, or invoke
+  WebCrypto signing/derivation APIs while active. Private keys are stored as
+  non-extractable `CryptoKey` handles per user in IndexedDB on the app origin, so
+  raw private key bytes cannot be exported, though active origin scripts could
+  still use them in place.
 - **A malicious or compromised server.** The app is served as JavaScript, and
   profiles host public keys. A compromised Supabase project or Vercel deployment
   could serve modified code or substitute keys. Safety numbers support manual

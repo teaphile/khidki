@@ -5,7 +5,7 @@ import type { Identity, Profile } from '../types';
 import { fetchProfile, updateProfile } from '../lib/data';
 import { publicBundle, samePublicKey } from '../lib/crypto';
 import { supabase, supabaseConfigured } from '../lib/env';
-import { getOrCreateIdentity } from '../lib/identityStore';
+import { clearIdentityMemoryCache, getOrCreateIdentity } from '../lib/identityStore';
 
 type AuthContextValue = {
   configured: boolean;
@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [hadRecoverySession, setHadRecoverySession] = useState(false);
   const user = session?.user ?? null;
   const userId = user?.id ?? null;
+  const userEmail = user?.email ?? null;
 
   useEffect(() => {
     if (!supabase) return;
@@ -67,9 +68,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
-      setSession(nextSession);
+      setSession((previous) => {
+        if (previous?.user?.id && previous.user.id !== nextSession?.user?.id) {
+          setProfile(null);
+          setIdentity(null);
+          setProfileError(null);
+        }
+        return nextSession;
+      });
       if (event === 'PASSWORD_RECOVERY') setHadRecoverySession(true);
       if (event === 'SIGNED_OUT') {
+        clearIdentityMemoryCache();
         setProfile(null);
         setIdentity(null);
         setProfileError(null);
@@ -106,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const deviceIdentity = await getOrCreateIdentity();
+        const deviceIdentity = await getOrCreateIdentity(userId, loaded.public_key, userEmail);
         if (!active) return;
         const bundle = publicBundle(deviceIdentity);
 
@@ -126,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [userId]);
+  }, [userId, userEmail]);
 
   const refreshProfile = useCallback(async (): Promise<Profile | null> => {
     if (!userId) return null;
@@ -141,6 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   const signOut = useCallback(async () => {
+    clearIdentityMemoryCache();
     if (!supabase) return;
     await supabase.auth.signOut({ scope: 'local' });
   }, []);

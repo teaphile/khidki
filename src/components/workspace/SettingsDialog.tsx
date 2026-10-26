@@ -18,6 +18,7 @@ import { useToast } from '../../context/ToastContext';
 import { deleteAccount, updateProfile } from '../../lib/data';
 import { fingerprint, publicBundle } from '../../lib/crypto';
 import { supabase } from '../../lib/env';
+import { clearIdentity } from '../../lib/identityStore';
 import { displayNameSchema, firstIssue } from '../../lib/validation';
 import type { ThemeMode } from '../../types';
 import { Modal } from '../ui/Modal';
@@ -106,9 +107,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     if (!profile || deleteConfirm !== profile.username) return;
     setDeleting(true);
     try {
+      const deletingId = profile.id;
+      const deletingEmail = user?.email ?? null;
       await deleteAccount();
+      await clearIdentity(deletingId, deletingEmail);
       await signOut();
-      toast('Your account has been deleted.', 'info');
+      toast('Your account and device keys have been deleted.', 'info');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Unable to delete your account.', 'error');
     } finally {

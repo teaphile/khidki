@@ -12,9 +12,48 @@ export type LinkAssessment = {
 const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
 const TRAILING = /[.,!?;:)\]}'"]+$/;
 
+function stripBrackets(host: string): string {
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
 function isIpHost(host: string): boolean {
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
-  return host.includes(':') && /^[0-9a-f:]+$/i.test(host);
+  const clean = stripBrackets(host);
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(clean)) return true;
+  if (/^(?:0x[0-9a-f]+|\d+)$/i.test(clean)) return true;
+  return clean.includes(':') && /^[0-9a-f:.]+$/i.test(clean);
+}
+
+function isLocalLoopbackHost(host: string): boolean {
+  const clean = stripBrackets(host).toLowerCase();
+  if (
+    clean === 'localhost' ||
+    clean.endsWith('.localhost') ||
+    clean === '0.0.0.0' ||
+    clean === '::1' ||
+    clean === '0:0:0:0:0:0:0:1' ||
+    clean.startsWith('127.')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isPrivateNetworkHost(host: string): boolean {
+  const clean = stripBrackets(host).toLowerCase();
+  if (
+    clean.endsWith('.local') ||
+    clean.endsWith('.internal') ||
+    clean.startsWith('10.') ||
+    clean.startsWith('192.168.') ||
+    clean.startsWith('169.254.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(clean) ||
+    clean.startsWith('fe80:') ||
+    clean.startsWith('fc') ||
+    clean.startsWith('fd')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function assessLink(raw: string): LinkAssessment | null {
@@ -39,9 +78,25 @@ export function assessLink(raw: string): LinkAssessment | null {
     };
   }
 
+  if (isLocalLoopbackHost(url.hostname)) {
+    return {
+      href: url.href,
+      host: url.hostname,
+      protocol: url.protocol === 'http:' ? 'http:' : 'https:',
+      canOpen: false,
+      warnings: ['This link targets a local device address and is blocked for your safety.'],
+    };
+  }
+
   const warnings: string[] = [];
   if (url.protocol === 'http:') warnings.push('This link is not encrypted (HTTP).');
   if (isIpHost(url.hostname)) warnings.push('This link points to a raw IP address.');
+  if (isPrivateNetworkHost(url.hostname)) {
+    warnings.push('This link points to a private or internal network address.');
+  }
+  if (url.port && url.port !== '443' && url.port !== '80') {
+    warnings.push(`This link uses a non-standard network port (:${url.port}).`);
+  }
   if (url.hostname.startsWith('xn--') || url.hostname.includes('.xn--')) {
     warnings.push('This link uses an internationalized domain that can imitate another site.');
   }

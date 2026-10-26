@@ -59,6 +59,8 @@ describe('file inspection', () => {
 
   it('sanitizes names and reports sizes', () => {
     expect(sanitizeFileName('../../etc/passwd')).toBe('passwd');
+    expect(sanitizeFileName('.env')).toBe('env');
+    expect(sanitizeFileName('..hidden.txt')).toBe('hidden.txt');
     expect(sanitizeFileName('a\u0000b\u001fc.txt')).toBe('abc.txt');
     expect(sanitizeFileName(' report (final).pdf ')).toBe('report (final).pdf');
     expect(sanitizeFileName('')).toBe('file');

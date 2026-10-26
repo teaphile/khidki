@@ -7,6 +7,8 @@ export type Jwk = {
   [key: string]: unknown;
 };
 
+export type PrivateKeyMaterial = CryptoKey | Jwk;
+
 export type PublicKeyBundle = {
   v: 1;
   ecdh: Jwk;
@@ -14,9 +16,9 @@ export type PublicKeyBundle = {
 };
 
 export type Identity = {
-  v: 1;
-  ecdh: { publicKey: Jwk; privateKey: Jwk };
-  sig: { publicKey: Jwk; privateKey: Jwk };
+  v: 1 | 2;
+  ecdh: { publicKey: Jwk; privateKey: PrivateKeyMaterial };
+  sig: { publicKey: Jwk; privateKey: PrivateKeyMaterial };
 };
 
 export type Profile = {

@@ -17,7 +17,7 @@ import { useCall } from '../../context/CallContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import { searchPeople } from '../../lib/data';
-import { fingerprint } from '../../lib/crypto';
+import { publicBundle, safetyNumberForPair } from '../../lib/crypto';
 import { conversationHandle, conversationSeed, conversationTitle, dmPeer } from '../../lib/format';
 import type { Conversation, PeopleResult } from '../../types';
 import { Avatar } from '../ui/Avatar';
@@ -32,7 +32,7 @@ export function ConversationInfoDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  const { profile } = useAuth();
+  const { profile, identity } = useAuth();
   const { addGroupMember, removeGroupMember, leaveGroupChat, renameGroupChat } = useChat();
   const { startCall } = useCall();
   const { toast } = useToast();
@@ -63,18 +63,18 @@ export function ConversationInfoDialog({
   }, [conversation.id, conversation.title, open]);
 
   useEffect(() => {
-    if (!open || conversation.kind !== 'dm' || !peer?.publicKey) {
+    if (!open || conversation.kind !== 'dm' || !peer?.publicKey || !identity) {
       setSafetyNumber(null);
       return;
     }
     let active = true;
-    void fingerprint(peer.publicKey).then((value) => {
+    void safetyNumberForPair(publicBundle(identity), peer.publicKey).then((value) => {
       if (active) setSafetyNumber(value);
     });
     return () => {
       active = false;
     };
-  }, [conversation.kind, peer, open]);
+  }, [conversation.kind, identity, peer, open]);
 
   useEffect(() => {
     if (!open || conversation.kind !== 'group' || !isAdmin) return;

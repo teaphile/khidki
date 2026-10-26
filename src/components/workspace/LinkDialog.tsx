@@ -68,7 +68,9 @@ export function LinkDialog({
           </p>
           {!link.canOpen ? (
             <p className="form-error">
-              This link cannot be opened safely because it is not encrypted with HTTPS.
+              {link.protocol === 'http:'
+                ? 'This link cannot be opened safely because it is not encrypted with HTTPS.'
+                : 'This link was blocked because it contains unsafe destination parameters.'}
             </p>
           ) : null}
         </div>

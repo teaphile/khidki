@@ -9,6 +9,7 @@ import {
   EyeOff,
   KeyRound,
   Loader2,
+  Lock,
   Mail,
   ShieldCheck,
 } from 'lucide-react';
@@ -16,7 +17,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { isUsernameAvailable } from '../../lib/data';
 import { supabase } from '../../lib/env';
 import { publicBundle } from '../../lib/crypto';
-import { getOrCreateIdentity } from '../../lib/identityStore';
+import { commitSignupIdentity, stageSignupIdentity } from '../../lib/identityStore';
 import {
   displayNameSchema,
   emailSchema,
@@ -28,6 +29,31 @@ import { LogoMark } from '../ui/LogoMark';
 import { ThemeToggle } from '../ui/ThemeToggle';
 
 type Mode = 'signin' | 'signup' | 'forgot' | 'check-email' | 'forgot-sent';
+
+function safeStartupAuthError(search: string, hash: string): string | null {
+  const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+  const queryParams = new URLSearchParams(search);
+  const code = (hashParams.get('error_code') ?? queryParams.get('error_code') ?? '').toLowerCase();
+  const error = (hashParams.get('error') ?? queryParams.get('error') ?? '').toLowerCase();
+  const rawDescription = (
+    hashParams.get('error_description') ??
+    queryParams.get('error_description') ??
+    ''
+  ).toLowerCase();
+
+  if (!code && !error && !rawDescription) return null;
+
+  if (code.includes('otp_expired') || rawDescription.includes('expired')) {
+    return 'That verification or recovery link has expired. Request a fresh link and try again.';
+  }
+  if (code.includes('flow_state') || rawDescription.includes('invalid')) {
+    return 'That authentication link is no longer valid. Please sign in or request a new link.';
+  }
+  if (error === 'access_denied') {
+    return 'Email verification could not be completed. Request a fresh link if needed.';
+  }
+  return 'Authentication could not be completed. Please try signing in again.';
+}
 
 function friendlyAuthError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -67,12 +93,10 @@ export function AuthPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const startupError = useMemo(() => {
-    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-    const query = new URLSearchParams(window.location.search);
-    const description = hash.get('error_description') ?? query.get('error_description');
-    return description ? description.replace(/\+/g, ' ') : null;
-  }, []);
+  const startupError = useMemo(
+    () => safeStartupAuthError(window.location.search, window.location.hash),
+    [],
+  );
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(startupError);
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
@@ -133,7 +157,7 @@ export function AuthPage() {
       throw new Error('That username is already taken.');
     }
 
-    const identity = await getOrCreateIdentity();
+    const identity = await stageSignupIdentity(parsedEmail.data);
     const bundle = publicBundle(identity);
 
     const { data, error } = await supabase.auth.signUp({
@@ -149,6 +173,10 @@ export function AuthPage() {
       },
     });
     if (error) throw error;
+
+    if (data.user?.id) {
+      await commitSignupIdentity(data.user.id, parsedEmail.data, identity);
+    }
 
     if (data.session && data.user?.email_confirmed_at) {
       setNotice('Account created. You are signed in.');
@@ -237,7 +265,7 @@ export function AuthPage() {
             </h1>
             <p>
               Sotto is built for conversations that belong to the moment. Messages and files are
-              encrypted in your browser and disappear two minutes after they are sent.
+              encrypted in your browser and never stored on a server.
             </p>
             <ul className="auth-points">
               <li>
@@ -262,10 +290,6 @@ export function AuthPage() {
                 </div>
               </li>
             </ul>
-          </div>
-          <div className="auth-story__stamp" aria-hidden="true">
-            <span>2:00</span>
-            <small>then gone</small>
           </div>
         </section>
 
@@ -549,7 +573,7 @@ export function AuthPage() {
       <footer className="auth-footer">
         <span>Sotto · Private conversations. Nothing kept.</span>
         <span className={`theme-note theme-note--${resolved}`}>
-          <Clock3 size={14} aria-hidden="true" /> Messages expire after 2 minutes
+          <Lock size={14} aria-hidden="true" /> End-to-end encrypted · Zero message archive
         </span>
       </footer>
     </div>

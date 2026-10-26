@@ -1,11 +1,11 @@
--- Sotto schema, policies, and realtime authorization.
+-- Sotto schema, policies, rate limits, and realtime authorization.
 -- Apply this file once in the Supabase SQL editor, or with `supabase db push`.
 --
 -- What is stored here:
---   * profiles (username, display name, public keys)
+--   * profiles (username, display name, validated public keys)
 --   * conversation metadata and memberships
 --   * per-member wrapped conversation keys
---   * a disposable-email blocklist
+--   * a disposable-email blocklist and per-user RPC rate-limit counters
 --
 -- What is never stored here:
 --   * message bodies, captions, or attachments
@@ -16,6 +16,33 @@
 
 create extension if not exists pgcrypto;
 
+-- ---------------------------------------------------------- key validator ----
+
+create or replace function public.is_valid_public_key(pkey jsonb)
+returns boolean
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select
+    pkey is not null
+    and jsonb_typeof(pkey) = 'object'
+    and octet_length(pkey::text) <= 2048
+    and pkey -> 'v' = '1'::jsonb
+    and jsonb_typeof(pkey -> 'ecdh') = 'object'
+    and jsonb_typeof(pkey -> 'sig') = 'object'
+    and not ((pkey -> 'ecdh') ? 'd')
+    and not ((pkey -> 'sig') ? 'd')
+    and (pkey -> 'ecdh' ->> 'kty') = 'EC'
+    and (pkey -> 'ecdh' ->> 'crv') = 'P-256'
+    and (pkey -> 'ecdh' ->> 'x') ~ '^[A-Za-z0-9_-]{40,64}$'
+    and (pkey -> 'ecdh' ->> 'y') ~ '^[A-Za-z0-9_-]{40,64}$'
+    and (pkey -> 'sig' ->> 'kty') = 'EC'
+    and (pkey -> 'sig' ->> 'crv') = 'P-256'
+    and (pkey -> 'sig' ->> 'x') ~ '^[A-Za-z0-9_-]{40,64}$'
+    and (pkey -> 'sig' ->> 'y') ~ '^[A-Za-z0-9_-]{40,64}$';
+$$;
+
 -- ---------------------------------------------------------------- tables ----
 
 create table if not exists public.profiles (
@@ -25,7 +52,7 @@ create table if not exists public.profiles (
   display_name text not null
     check (char_length(display_name) between 1 and 48),
   public_key jsonb
-    check (public_key is null or jsonb_typeof(public_key) = 'object'),
+    check (public_key is null or public.is_valid_public_key(public_key)),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -63,7 +90,7 @@ create table if not exists public.conversation_keys (
   wrap_iv text not null check (char_length(wrap_iv) between 8 and 128),
   from_user uuid not null references public.profiles (id) on delete cascade,
   from_public_key jsonb not null
-    check (jsonb_typeof(from_public_key) = 'object'),
+    check (public.is_valid_public_key(from_public_key)),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (conversation_id, user_id)
@@ -80,10 +107,9 @@ where k.from_public_key is null
   and p.id = k.from_user
   and p.public_key is not null;
 
--- A row without a sender key cannot be unwrapped by the recipient and would
--- block the not-null constraint below. Current members provision a fresh key
--- the next time the conversation is opened.
-delete from public.conversation_keys where from_public_key is null;
+delete from public.conversation_keys
+where from_public_key is null
+   or not public.is_valid_public_key(from_public_key);
 
 alter table public.conversation_keys
   alter column from_public_key set not null;
@@ -94,17 +120,83 @@ create table if not exists public.blocked_email_domains (
 );
 
 insert into public.blocked_email_domains (domain) values
-  ('10minutemail.com'), ('burnermail.io'), ('dispostable.com'),
+  ('10minutemail.com'), ('burnermail.io'), ('crazymailing.com'),
+  ('discard.email'), ('dispostable.com'), ('emailfake.com'),
   ('emailondeck.com'), ('fakeinbox.com'), ('getnada.com'), ('grr.la'),
-  ('guerrillamail.com'), ('guerrillamailblock.com'), ('harakirimail.com'),
-  ('mailcatch.com'), ('maildrop.cc'), ('mailinator.com'), ('mailnesia.com'),
-  ('mailnull.com'), ('mintemail.com'), ('mohmal.com'), ('pokemail.net'),
-  ('sharklasers.com'), ('spam4.me'), ('spamgourmet.com'), ('temp-mail.org'),
+  ('guerrillamail.com'), ('guerrillamail.de'), ('guerrillamail.info'),
+  ('guerrillamail.net'), ('guerrillamail.org'), ('guerrillamailblock.com'),
+  ('harakirimail.com'), ('inboxkitten.com'), ('mailcatch.com'),
+  ('maildrop.cc'), ('mailinator.com'), ('mailnesia.com'), ('mailnull.com'),
+  ('mailpoof.com'), ('mailsac.com'), ('mintemail.com'), ('mohmal.com'),
+  ('mytemp.email'), ('pokemail.net'), ('sharklasers.com'), ('spam4.me'),
+  ('spambox.us'), ('spamgourmet.com'), ('temp-mail.org'), ('tempail.com'),
   ('tempinbox.com'), ('tempmail.com'), ('tempmailo.com'), ('throwawaymail.com'),
-  ('trashmail.com'), ('yopmail.com')
+  ('tmpmail.net'), ('tmpmail.org'), ('trashmail.com'), ('trashmail.net'),
+  ('yopmail.com')
 on conflict (domain) do nothing;
 
+create table if not exists public.rate_limits (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  action text not null check (char_length(action) between 1 and 64),
+  hits int not null default 1 check (hits >= 1),
+  reset_at timestamptz not null,
+  primary key (user_id, action)
+);
+
 -- ------------------------------------------------------------- utilities ----
+
+create or replace function public.enforce_rate_limit(
+  p_action text,
+  p_limit int,
+  p_window_seconds int
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  me uuid := auth.uid();
+  current_hits int;
+begin
+  if me is null then
+    raise exception 'Not authenticated.';
+  end if;
+
+  insert into public.rate_limits (user_id, action, hits, reset_at)
+  values (me, p_action, 1, now() + make_interval(secs => p_window_seconds))
+  on conflict (user_id, action) do update
+    set hits = case
+          when public.rate_limits.reset_at <= now() then 1
+          else public.rate_limits.hits + 1
+        end,
+        reset_at = case
+          when public.rate_limits.reset_at <= now()
+            then now() + make_interval(secs => p_window_seconds)
+          else public.rate_limits.reset_at
+        end
+  returning hits into current_hits;
+
+  if current_hits > p_limit then
+    raise exception 'Too many requests. Wait a moment before trying again.';
+  end if;
+end;
+$$;
+
+create or replace function public.is_confirmed_user(p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1
+    from auth.users u
+    where u.id = p_user_id
+      and u.email_confirmed_at is not null
+  );
+$$;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -132,6 +224,12 @@ as $$
 begin
   if new.username is distinct from old.username then
     raise exception 'Usernames cannot be changed.';
+  end if;
+  if old.public_key is not null and new.public_key is null then
+    raise exception 'A device public key cannot be removed.';
+  end if;
+  if new.public_key is not null and not public.is_valid_public_key(new.public_key) then
+    raise exception 'Invalid device public key.';
   end if;
   return new;
 end;
@@ -207,7 +305,7 @@ as $$
 declare
   email_domain text;
 begin
-  if new.email is null or new.email = '' then
+  if new.email is null or new.email = '' or char_length(new.email) > 254 then
     raise exception 'An email address is required.';
   end if;
 
@@ -263,9 +361,18 @@ begin
   if char_length(dname) < 1 or char_length(dname) > 48 then
     raise exception 'Display name must be between 1 and 48 characters.';
   end if;
-  if pkey is null or jsonb_typeof(pkey) <> 'object' then
-    raise exception 'A device public key is required.';
+  if not public.is_valid_public_key(pkey) then
+    raise exception 'A valid device public key is required.';
   end if;
+
+  -- Reclaim usernames held by abandoned unconfirmed signups older than 24h.
+  delete from auth.users u
+  using public.profiles p
+  where p.id = u.id
+    and p.username = uname
+    and u.id <> new.id
+    and u.email_confirmed_at is null
+    and u.created_at <= now() - interval '24 hours';
 
   insert into public.profiles (id, username, display_name, public_key)
   values (new.id, uname, dname, pkey);
@@ -296,7 +403,14 @@ as $$
       'undefined', 'www'
     ])
     and not exists (
-      select 1 from public.profiles where username = lower(trim(p_username))
+      select 1
+      from public.profiles p
+      join auth.users u on u.id = p.id
+      where p.username = lower(trim(p_username))
+        and (
+          u.email_confirmed_at is not null
+          or u.created_at > now() - interval '24 hours'
+        )
     );
 $$;
 
@@ -304,22 +418,32 @@ $$;
 -- Prefix matching avoids wildcard injection and keeps enumeration noisy.
 create or replace function public.search_people(p_query text)
 returns table (id uuid, username text, display_name text, public_key jsonb)
-language sql
-stable
+language plpgsql
+volatile
 security definer
 set search_path = public, pg_temp
 as $$
-  select p.id, p.username, p.display_name, p.public_key
-  from public.profiles p
-  join auth.users u on u.id = p.id
-  where auth.uid() is not null
-    and p.id <> auth.uid()
-    and p.public_key is not null
-    and u.email_confirmed_at is not null
-    and char_length(trim(p_query)) >= 2
-    and starts_with(p.username, lower(trim(p_query)))
-  order by p.username
-  limit 12;
+declare
+  clean_query text := lower(trim(coalesce(p_query, '')));
+begin
+  perform public.enforce_rate_limit('search_people', 60, 60);
+
+  if char_length(clean_query) < 2 or char_length(clean_query) > 40 then
+    return;
+  end if;
+
+  return query
+    select p.id, p.username, p.display_name, p.public_key
+    from public.profiles p
+    join auth.users u on u.id = p.id
+    where auth.uid() is not null
+      and p.id <> auth.uid()
+      and p.public_key is not null
+      and u.email_confirmed_at is not null
+      and starts_with(p.username, clean_query)
+    order by p.username
+    limit 12;
+end;
 $$;
 
 create or replace function public.start_dm(p_username text)
@@ -335,11 +459,18 @@ declare
   cid uuid;
 begin
   if me is null then raise exception 'Not authenticated.'; end if;
+  if not public.is_confirmed_user(me) then
+    raise exception 'Confirm your email before starting conversations.';
+  end if;
+  perform public.enforce_rate_limit('start_dm', 25, 60);
 
-  select id into other
-  from public.profiles
-  where username = lower(trim(p_username))
-    and public_key is not null;
+  select p.id into other
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  where p.username = lower(trim(p_username))
+    and p.public_key is not null
+    and u.email_confirmed_at is not null;
+
   if other is null then raise exception 'That username does not exist.'; end if;
   if other = me then raise exception 'You cannot message yourself.'; end if;
 
@@ -372,6 +503,11 @@ declare
   member_ids uuid[];
 begin
   if me is null then raise exception 'Not authenticated.'; end if;
+  if not public.is_confirmed_user(me) then
+    raise exception 'Confirm your email before creating a group.';
+  end if;
+  perform public.enforce_rate_limit('create_group', 12, 300);
+
   if char_length(trim(p_title)) < 1 or char_length(trim(p_title)) > 64 then
     raise exception 'Group name must be between 1 and 64 characters.';
   end if;
@@ -382,8 +518,10 @@ begin
   select array_agg(distinct p.id)
   into member_ids
   from public.profiles p
+  join auth.users u on u.id = p.id
   where p.username = any (select lower(trim(unnest(p_usernames))))
     and p.public_key is not null
+    and u.email_confirmed_at is not null
     and p.id <> me;
 
   if coalesce(array_length(member_ids, 1), 0) < 1 then
@@ -423,15 +561,18 @@ begin
   if not public.is_conversation_admin(p_conversation_id, me) then
     raise exception 'Only group admins can add people.';
   end if;
+  perform public.enforce_rate_limit('add_group_member', 30, 60);
 
   select title into group_title from public.conversations
   where id = p_conversation_id and kind = 'group';
   if group_title is null then raise exception 'Group not found.'; end if;
 
-  select id into other
-  from public.profiles
-  where username = lower(trim(p_username))
-    and public_key is not null;
+  select p.id into other
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  where p.username = lower(trim(p_username))
+    and p.public_key is not null
+    and u.email_confirmed_at is not null;
   if other is null then raise exception 'That username does not exist.'; end if;
 
   select count(*) into count_members
@@ -534,6 +675,8 @@ begin
   if not public.is_conversation_admin(p_conversation_id, auth.uid()) then
     raise exception 'Only group admins can rename the group.';
   end if;
+  perform public.enforce_rate_limit('rename_group', 15, 60);
+
   if char_length(trim(p_title)) < 1 or char_length(trim(p_title)) > 64 then
     raise exception 'Group name must be between 1 and 64 characters.';
   end if;
@@ -545,9 +688,9 @@ end;
 $$;
 
 -- Any member may provision the conversation key for the current membership.
--- This is required for the first message in a DM and for group creation. The
--- sender identity and public key are resolved server-side, never trusted from
--- the request body, so recipients always unwrap against a real profile key.
+-- The sender identity and public key are resolved server-side, never trusted
+-- from the request body, and every active member must receive a key in this
+-- exact transaction so no member can be silently partitioned onto an old key.
 create or replace function public.set_conversation_keys(
   p_conversation_id uuid,
   p_keys jsonb
@@ -565,16 +708,18 @@ declare
   wrapped text;
   iv text;
   count_keys int;
+  seen_targets uuid[] := '{}';
 begin
   if me is null or not public.is_conversation_member(p_conversation_id, me) then
     raise exception 'You are not a member of this conversation.';
   end if;
+  perform public.enforce_rate_limit('set_conversation_keys', 40, 60);
 
   select public_key into my_public_key
   from public.profiles
   where id = me;
 
-  if my_public_key is null then
+  if not public.is_valid_public_key(my_public_key) then
     raise exception 'Complete device setup before sharing keys.';
   end if;
 
@@ -597,6 +742,11 @@ begin
        or not public.is_conversation_member(p_conversation_id, target) then
       raise exception 'A key target is not a member of this conversation.';
     end if;
+    if target = any (seen_targets) then
+      raise exception 'Duplicate key target in rotation payload.';
+    end if;
+    seen_targets := array_append(seen_targets, target);
+
     if wrapped is null or char_length(wrapped) not between 16 and 4096 then
       raise exception 'Invalid wrapped key.';
     end if;
@@ -605,9 +755,9 @@ begin
     end if;
 
     insert into public.conversation_keys (
-      conversation_id, user_id, wrapped_key, wrap_iv, from_user, from_public_key
+      conversation_id, user_id, wrapped_key, wrap_iv, from_user, from_public_key, updated_at
     ) values (
-      p_conversation_id, target, wrapped, iv, me, my_public_key
+      p_conversation_id, target, wrapped, iv, me, my_public_key, now()
     )
     on conflict (conversation_id, user_id) do update
       set wrapped_key = excluded.wrapped_key,
@@ -617,18 +767,15 @@ begin
           updated_at = now();
   end loop;
 
-  -- Rotations must leave every current member with a usable key row. A removed
-  -- member is intentionally excluded because their membership already ended.
+  -- Every current member with a device public key must be covered in THIS
+  -- exact transaction (`updated_at = now()`), preventing key-partitioning.
   if exists (
     select 1
     from public.conversation_members m
+    join public.profiles p on p.id = m.user_id
     where m.conversation_id = p_conversation_id
-      and not exists (
-        select 1 from public.conversation_keys k
-        where k.conversation_id = p_conversation_id
-          and k.user_id = m.user_id
-          and k.updated_at >= now() - interval '15 seconds'
-      )
+      and p.public_key is not null
+      and not (m.user_id = any (seen_targets))
   ) then
     raise exception 'Every current member needs a fresh conversation key.';
   end if;
@@ -679,6 +826,7 @@ begin
     and m.user_id = me
     and c.kind = 'dm';
 
+  delete from public.rate_limits where user_id = me;
   delete from auth.users where id = me;
 
   -- A group whose last member was just removed must not remain as an orphan.
@@ -697,6 +845,7 @@ alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.conversation_keys enable row level security;
 alter table public.blocked_email_domains enable row level security;
+alter table public.rate_limits enable row level security;
 
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles
@@ -741,6 +890,14 @@ grant select on public.conversations, public.conversation_members, public.conver
   to authenticated;
 
 revoke all on public.blocked_email_domains from anon, authenticated;
+revoke all on public.rate_limits from anon, authenticated;
+
+revoke all on function public.is_valid_public_key(jsonb) from public;
+grant execute on function public.is_valid_public_key(jsonb) to anon, authenticated;
+
+revoke all on function public.enforce_rate_limit(text, int, int) from public, anon, authenticated;
+revoke all on function public.is_confirmed_user(uuid) from public, anon;
+grant execute on function public.is_confirmed_user(uuid) to authenticated;
 
 revoke all on function public.is_conversation_member(uuid, uuid) from public, anon;
 revoke all on function public.is_conversation_admin(uuid, uuid) from public, anon;
@@ -778,7 +935,18 @@ grant execute on function public.delete_account() to authenticated;
 -- write to that inbox so call offers reach the callee; every envelope is
 -- signed with the sender's device key and verified on receipt.
 
-alter table realtime.messages enable row level security;
+do $$
+begin
+  if not coalesce((
+    select c.relrowsecurity
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'realtime' and c.relname = 'messages'
+  ), false) then
+    alter table realtime.messages enable row level security;
+  end if;
+end;
+$$;
 
 drop policy if exists sotto_realtime_conversation_read on realtime.messages;
 create policy sotto_realtime_conversation_read on realtime.messages

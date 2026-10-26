@@ -20,15 +20,24 @@ describe('link safety', () => {
     });
   });
 
-  it('refuses plaintext HTTP and hidden credentials', () => {
+  it('refuses plaintext HTTP, hidden credentials, and local loopback addresses', () => {
     expect(assessLink('http://example.com')?.canOpen).toBe(false);
     expect(assessLink('https://user:pass@example.com')?.canOpen).toBe(false);
     expect(assessLink('https://user:pass@example.com')?.warnings[0]).toMatch(/hidden credentials/i);
+    expect(assessLink('https://localhost:3000/admin')?.canOpen).toBe(false);
+    expect(assessLink('https://127.0.0.1:8080/')?.canOpen).toBe(false);
+    expect(assessLink('https://[::1]/')?.canOpen).toBe(false);
   });
 
-  it('warns about raw IPs, punycode, deep subdomains, and long hosts', () => {
+  it('warns about raw IPs (including IPv6), punycode, custom ports, deep subdomains, and long hosts', () => {
     expect(assessLink('https://192.168.1.10')?.warnings).toContain(
       'This link points to a raw IP address.',
+    );
+    expect(assessLink('https://[2001:db8::1]/path')?.warnings).toContain(
+      'This link points to a raw IP address.',
+    );
+    expect(assessLink('https://example.com:8443/app')?.warnings.join(' ')).toMatch(
+      /non-standard network port/i,
     );
     expect(assessLink('https://xn--exmple-cua.com')?.warnings.join(' ')).toMatch(
       /internationalized domain/i,

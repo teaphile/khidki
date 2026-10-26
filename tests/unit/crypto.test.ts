@@ -7,9 +7,13 @@ import {
   encryptJson,
   fingerprint,
   generateConversationKey,
+  generateDeviceIdentity,
   generateIdentity,
+  parsePublicKeyBundle,
   publicBundle,
+  safetyNumberForPair,
   samePublicKey,
+  sealIdentity,
   signPayload,
   unwrapConversationKey,
   verifyPayload,
@@ -34,6 +38,69 @@ describe('crypto', () => {
 
     expect(fromAlice).toBe(fromBob);
     expect(b64.decode(fromAlice)).toHaveLength(32);
+  });
+
+  it('generates non-extractable device keys that interoperate with JWK keys', async () => {
+    const alice = await generateDeviceIdentity();
+    const bob = await generateIdentity();
+
+    expect(alice.v).toBe(2);
+    await expect(
+      crypto.subtle.exportKey('jwk', alice.ecdh.privateKey as CryptoKey),
+    ).rejects.toThrow();
+    await expect(
+      crypto.subtle.exportKey('jwk', alice.sig.privateKey as CryptoKey),
+    ).rejects.toThrow();
+
+    const conversationKey = generateConversationKey();
+    const wrapped = await wrapConversationKey(
+      conversationKey,
+      alice.ecdh.privateKey,
+      publicBundle(bob).ecdh,
+      'conv-sealed',
+    );
+    const unwrapped = await unwrapConversationKey(
+      wrapped.wrappedKey,
+      wrapped.iv,
+      bob.ecdh.privateKey,
+      publicBundle(alice).ecdh,
+      'conv-sealed',
+    );
+    expect(unwrapped).toBe(conversationKey);
+
+    const sig = await signPayload(alice.sig.privateKey, 'sealed-message');
+    await expect(verifyPayload(publicBundle(alice).sig, 'sealed-message', sig)).resolves.toBe(true);
+  });
+
+  it('seals legacy JWK identities into non-extractable keys', async () => {
+    const legacy = await generateIdentity();
+    const sealed = await sealIdentity(legacy);
+
+    expect(sealed.v).toBe(2);
+    expect(samePublicKey(publicBundle(legacy), publicBundle(sealed))).toBe(true);
+    await expect(
+      crypto.subtle.exportKey('jwk', sealed.ecdh.privateKey as CryptoKey),
+    ).rejects.toThrow();
+  });
+
+  it('validates public key bundles strictly and rejects private scalars', async () => {
+    const identity = await generateIdentity();
+    const valid = publicBundle(identity);
+
+    expect(parsePublicKeyBundle(valid)).toEqual(valid);
+    expect(
+      parsePublicKeyBundle({
+        ...valid,
+        ecdh: { ...valid.ecdh, d: 'leaked-private-scalar' },
+      }),
+    ).toBeNull();
+    expect(
+      parsePublicKeyBundle({
+        ...valid,
+        ecdh: { ...valid.ecdh, crv: 'P-384' },
+      }),
+    ).toBeNull();
+    expect(parsePublicKeyBundle(null)).toBeNull();
   });
 
   it('wraps and unwraps a conversation key', async () => {
@@ -100,14 +167,23 @@ describe('crypto', () => {
     ).resolves.toBe(false);
   });
 
-  it('produces a stable grouped fingerprint', async () => {
-    const identity = await generateIdentity();
-    const bundle = publicBundle(identity);
-    const first = await fingerprint(bundle);
+  it('produces a stable grouped fingerprint and symmetric pairwise safety number', async () => {
+    const alice = publicBundle(await generateIdentity());
+    const bob = publicBundle(await generateIdentity());
+    const mallory = publicBundle(await generateIdentity());
+    const first = await fingerprint(alice);
 
     expect(first).toMatch(/^[0-9a-f]{4}( [0-9a-f]{4}){7}$/);
-    expect(await fingerprint(bundle)).toBe(first);
-    expect(await fingerprint(publicBundle(await generateIdentity()))).not.toBe(first);
+    expect(await fingerprint(alice)).toBe(first);
+    expect(await fingerprint(bob)).not.toBe(first);
+
+    const aliceSees = await safetyNumberForPair(alice, bob);
+    const bobSees = await safetyNumberForPair(bob, alice);
+    const mitmSees = await safetyNumberForPair(alice, mallory);
+
+    expect(aliceSees).toMatch(/^[0-9a-f]{4}( [0-9a-f]{4}){7}$/);
+    expect(aliceSees).toBe(bobSees);
+    expect(aliceSees).not.toBe(mitmSees);
   });
 
   it('detects key changes between devices', async () => {

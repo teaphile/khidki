@@ -4,7 +4,10 @@ const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ??
 const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? '';
 
 export const supabaseConfigured =
-  /^https:\/\/[^\s]+$/i.test(url) && anonKey.length > 40 && !url.includes('your-project');
+  /^https:\/\/[^\s]+$/i.test(url) &&
+  anonKey.length >= 32 &&
+  !url.includes('your-project') &&
+  !anonKey.includes('your-public-anon-key');
 
 export const supabase: SupabaseClient | null = supabaseConfigured
   ? createClient(url, anonKey, {

@@ -5,13 +5,14 @@ import type {
   Profile,
   PublicKeyBundle,
 } from '../types';
+import { parsePublicKeyBundle } from './crypto';
 import { requireSupabase } from './env';
 
 type RawProfile = {
   id: string;
   username: string;
   display_name: string;
-  public_key: PublicKeyBundle | null;
+  public_key: unknown;
   created_at: string;
 };
 
@@ -38,14 +39,24 @@ function profileOf(member: RawMember): RawProfile | null {
   return Array.isArray(member.profiles) ? (member.profiles[0] ?? null) : member.profiles;
 }
 
+function normalizeProfile(raw: RawProfile): Profile {
+  return {
+    id: raw.id,
+    username: raw.username,
+    display_name: raw.display_name,
+    public_key: parsePublicKeyBundle(raw.public_key),
+    created_at: raw.created_at,
+  };
+}
+
 export async function fetchProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await requireSupabase()
     .from('profiles')
     .select('id, username, display_name, public_key, created_at')
     .eq('id', userId)
-    .maybeSingle<Profile>();
+    .maybeSingle<RawProfile>();
   fail(error, 'Unable to load your profile.');
-  return data ?? null;
+  return data ? normalizeProfile(data) : null;
 }
 
 export async function updateProfile(
@@ -57,10 +68,10 @@ export async function updateProfile(
     .update(patch)
     .eq('id', userId)
     .select('id, username, display_name, public_key, created_at')
-    .single<Profile>();
+    .single<RawProfile>();
   fail(error, 'Unable to update your profile.');
   if (!data) throw new Error('Your profile could not be updated.');
-  return data;
+  return normalizeProfile(data);
 }
 
 export async function fetchConversations(): Promise<Conversation[]> {
@@ -86,7 +97,7 @@ export async function fetchConversations(): Promise<Conversation[]> {
           role: member.role,
           username: profile.username,
           displayName: profile.display_name,
-          publicKey: profile.public_key,
+          publicKey: parsePublicKeyBundle(profile.public_key),
         } satisfies ConversationMember;
       })
       .filter((member): member is ConversationMember => member !== null);
@@ -112,6 +123,10 @@ export type WrappedKeyRow = {
   updated_at: string;
 };
 
+type RawWrappedKeyRow = Omit<WrappedKeyRow, 'from_public_key'> & {
+  from_public_key: unknown;
+};
+
 export async function fetchWrappedKey(conversationId: string): Promise<WrappedKeyRow | null> {
   const { data, error } = await requireSupabase()
     .from('conversation_keys')
@@ -119,15 +134,36 @@ export async function fetchWrappedKey(conversationId: string): Promise<WrappedKe
       'conversation_id, user_id, wrapped_key, wrap_iv, from_user, from_public_key, updated_at',
     )
     .eq('conversation_id', conversationId)
-    .maybeSingle<WrappedKeyRow>();
+    .maybeSingle<RawWrappedKeyRow>();
   fail(error, 'Unable to load the conversation key.');
-  return data ?? null;
+  if (!data) return null;
+  const senderKey = parsePublicKeyBundle(data.from_public_key);
+  if (!senderKey) return null;
+  return { ...data, from_public_key: senderKey };
 }
 
 export async function searchPeople(query: string): Promise<PeopleResult[]> {
   const { data, error } = await requireSupabase().rpc('search_people', { p_query: query });
   fail(error, 'Unable to search for people.');
-  return (data ?? []) as PeopleResult[];
+  return (
+    (data ?? []) as Array<{
+      id: string;
+      username: string;
+      display_name: string;
+      public_key: unknown;
+    }>
+  )
+    .map((row) => {
+      const publicKey = parsePublicKeyBundle(row.public_key);
+      if (!publicKey) return null;
+      return {
+        id: row.id,
+        username: row.username,
+        display_name: row.display_name,
+        public_key: publicKey,
+      } satisfies PeopleResult;
+    })
+    .filter((person): person is PeopleResult => person !== null);
 }
 
 export async function isUsernameAvailable(username: string): Promise<boolean> {

@@ -35,6 +35,7 @@ const EMPTY_CALL: CallState = {
 
 const RING_TIMEOUT_MS = 45_000;
 const CONNECT_TIMEOUT_MS = 30_000;
+const CALL_REPLAY_TTL_MS = 180_000;
 
 type CallContextValue = {
   call: CallState;
@@ -91,6 +92,7 @@ function CallSession({
   const peerPublicRef = useRef<PublicKeyBundle | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const offerRef = useRef<RTCSessionDescriptionInit | null>(null);
+  const seenEnvelopesRef = useRef<Map<string, number>>(new Map());
   const ringTimerRef = useRef<number | null>(null);
   const connectTimerRef = useRef<number | null>(null);
   const disconnectTimerRef = useRef<number | null>(null);
@@ -449,16 +451,30 @@ function CallSession({
       if (event !== `call-${envelope.kind}`) return;
       if (envelope.to !== profile.id || envelope.from === profile.id) return;
 
+      const now = Date.now();
+      for (const [key, seenAt] of seenEnvelopesRef.current) {
+        if (now - seenAt > CALL_REPLAY_TTL_MS) seenEnvelopesRef.current.delete(key);
+      }
+      const replayKey = `${envelope.callId}:${envelope.kind}:${envelope.iv}`;
+      if (seenEnvelopesRef.current.has(replayKey)) return;
+
       let conversation = conversations.find((item) => item.id === envelope.conversationId);
-      if (!conversation) {
+      let peer = conversation?.members.find((member) => member.userId === envelope.from);
+      let verified = Boolean(
+        peer?.publicKey && (await verifyCallEnvelope(envelope, peer.publicKey)),
+      );
+
+      if (!verified) {
         const refreshed = await refreshConversations(true).catch(() => null);
         conversation = refreshed?.find((item) => item.id === envelope.conversationId);
+        peer = conversation?.members.find((member) => member.userId === envelope.from);
+        verified = Boolean(peer?.publicKey && (await verifyCallEnvelope(envelope, peer.publicKey)));
       }
-      if (!conversation) return;
-      const peer = conversation.members.find((member) => member.userId === envelope.from);
-      if (!peer?.publicKey) return;
+      if (!conversation || !peer?.publicKey || !verified) return;
+      if (conversation.kind !== 'dm') return;
+
+      seenEnvelopesRef.current.set(replayKey, now);
       const peerKey = peer.publicKey;
-      if (!(await verifyCallEnvelope(envelope, peerKey))) return;
 
       let data: CallData;
       try {

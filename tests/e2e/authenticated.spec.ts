@@ -63,7 +63,7 @@ test.describe('authenticated workspace layout', () => {
       } else {
         await page.getByRole('button', { name: 'Discover people' }).click();
       }
-      await expect(page.getByRole('heading', { name: /find people/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'People', exact: true })).toBeVisible();
       await expectNoHorizontalOverflow(page, `${label} people`, [
         '.rail *',
         '.list-pane *',
