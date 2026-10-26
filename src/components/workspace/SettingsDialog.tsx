@@ -10,7 +10,17 @@ import type { ThemeMode } from '../../types';
 import { DpUploadControl } from '../ui/DpUploadControl';
 import { Modal } from '../ui/Modal';
 
-export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDialog({
+  open,
+  onClose,
+  enterToSend,
+  onEnterToSendChange,
+}: {
+  open: boolean;
+  onClose: () => void;
+  enterToSend: boolean;
+  onEnterToSendChange: (enabled: boolean) => void;
+}) {
   const { profile, user, refreshProfile, signOut } = useAuth();
   const { mode, setMode } = useTheme();
   const { toast } = useToast();
@@ -162,6 +172,29 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               </button>
             ))}
           </div>
+        </section>
+
+        <section
+          className="settings-card settings-card--preference"
+          aria-label="Keyboard preference"
+        >
+          <div>
+            <span className="section-label">Press Enter to send</span>
+            <p className="muted-note">
+              When enabled, Enter sends your message and Shift+Enter starts a new line. Saved only
+              in this browser.
+            </p>
+          </div>
+          <button
+            type="button"
+            className={`preference-switch${enterToSend ? ' is-on' : ''}`}
+            role="switch"
+            aria-checked={enterToSend}
+            aria-label="Send messages with Enter"
+            onClick={() => onEnterToSendChange(!enterToSend)}
+          >
+            <span />
+          </button>
         </section>
 
         <section className="settings-card settings-card--session">

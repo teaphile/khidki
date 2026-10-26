@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
+import { readEnterToSendPreference, writeEnterToSendPreference } from '../../lib/preferences';
 import type { AppView } from '../../types';
 import { ConversationInfoDialog } from './ConversationInfoDialog';
 import { ConversationList } from './ConversationList';
@@ -18,6 +19,12 @@ export function Workspace() {
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [enterToSend, setEnterToSend] = useState(readEnterToSendPreference);
+
+  const changeEnterToSend = (enabled: boolean) => {
+    setEnterToSend(enabled);
+    writeEnterToSendPreference(enabled);
+  };
 
   const totalAlerts = totalUnreadChats + incomingRequestCount;
 
@@ -60,6 +67,7 @@ export function Workspace() {
 
       <main className="stage" aria-label="Conversation">
         <ConversationView
+          enterToSend={enterToSend}
           onBack={() => setActiveId(null)}
           onOpenInfo={() => setInfoOpen(true)}
           onOpenPeople={() => setView('people')}
@@ -81,7 +89,12 @@ export function Workspace() {
         onCreated={() => setView('chats')}
       />
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        enterToSend={enterToSend}
+        onEnterToSendChange={changeEnterToSend}
+      />
 
       {activeConversation ? (
         <ConversationInfoDialog

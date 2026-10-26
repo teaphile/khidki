@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Inbox, Loader2, ShieldCheck, X } from 'lucide-react';
+import { Check, CircleDot, Inbox, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
@@ -8,7 +8,7 @@ import {
   conversationHandle,
   conversationSeed,
   conversationTitle,
-  formatListTime,
+  formatRequestDate,
   pluralize,
 } from '../../lib/format';
 import { Avatar } from '../ui/Avatar';
@@ -62,7 +62,10 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
 
       <div className="panel__status">
         <ShieldCheck size={14} aria-hidden="true" />
-        <span>New people land here first so your main chat list stays clean</span>
+        <span>
+          Requests have no expiry. Accept, remove, or leave them pending; message auto-delete rules
+          still apply.
+        </span>
       </div>
 
       <div className="panel__body">
@@ -84,9 +87,14 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
               const unreadCount = unread[conversation.id] ?? list.length;
               const last = list[list.length - 1];
               const busy = busyId === conversation.id;
-              const time = last
-                ? formatListTime(last.createdAt)
-                : formatListTime(Date.parse(conversation.lastMessageAt || conversation.createdAt));
+              const activityAt = last
+                ? last.createdAt
+                : Date.parse(conversation.lastMessageAt || conversation.createdAt);
+              const activityDate = new Date(activityAt);
+              const activityDateTime = Number.isFinite(activityDate.getTime())
+                ? activityDate.toISOString()
+                : undefined;
+              const activityLabel = formatRequestDate(activityAt);
 
               return (
                 <li
@@ -97,6 +105,7 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
                     type="button"
                     className="request-card__main"
                     onClick={() => setActiveId(conversation.id)}
+                    aria-label={`Open request from ${title}`}
                   >
                     <Avatar
                       name={title}
@@ -106,9 +115,20 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
                     <span className="request-card__info">
                       <span className="request-card__top">
                         <strong className="truncate">{title}</strong>
-                        <time>{time}</time>
+                        <time
+                          dateTime={activityDateTime}
+                          title={`Latest message: ${activityLabel}`}
+                          aria-label={`Latest message on ${activityLabel}`}
+                        >
+                          {activityLabel}
+                        </time>
                       </span>
-                      <span className="request-card__handle">{handle}</span>
+                      <span className="request-card__meta">
+                        <span className="request-card__handle">{handle}</span>
+                        <span className="request-card__status">
+                          <CircleDot size={12} aria-hidden="true" /> Pending · no expiry
+                        </span>
+                      </span>
                       <span className="request-card__preview truncate">
                         {unreadCount > 0
                           ? `${pluralize(unreadCount, 'unread message')} · tap to view`
@@ -123,6 +143,7 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
                       className="button button--primary button--compact"
                       disabled={busy}
                       onClick={() => void handleAccept(conversation.id)}
+                      title={`Accept request from ${title}`}
                     >
                       {busy ? (
                         <Loader2 className="spin" size={14} aria-hidden="true" />
@@ -136,8 +157,9 @@ export function RequestsPanel({ onAccepted }: { onAccepted: () => void }) {
                       className="button button--secondary button--compact"
                       disabled={busy}
                       onClick={() => void handleDecline(conversation.id)}
+                      title={`Remove request from ${title} and delete its queued messages`}
                     >
-                      <X size={14} aria-hidden="true" /> Decline
+                      <Trash2 size={14} aria-hidden="true" /> Remove
                     </button>
                   </div>
                 </li>

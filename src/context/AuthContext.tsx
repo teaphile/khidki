@@ -6,6 +6,12 @@ import { fetchProfile, updateProfile } from '../lib/data';
 import { publicBundle, samePublicKey } from '../lib/crypto';
 import { supabase, supabaseConfigured } from '../lib/env';
 import {
+  clearStagedPasswords,
+  consumeStagedPassword,
+  discardStagedPassword,
+  stageLoginPassword,
+} from '../lib/stagedPassword';
+import {
   clearIdentityMemoryCache,
   createVaultedIdentity,
   getOrCreateIdentity,
@@ -24,6 +30,7 @@ type AuthContextValue = {
   profileError: string | null;
   hadRecoverySession: boolean;
   stageLoginPassword: (email: string, password: string) => void;
+  discardStagedLoginPassword: (email: string) => void;
   unlockKeyVault: (password: string) => Promise<boolean>;
   rotateIdentityWithPassword: (password: string) => Promise<void>;
   refreshProfile: () => Promise<Profile | null>;
@@ -31,24 +38,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-
-// Ephemeral in-memory password handoff between AuthPage.signIn and AuthProvider's
-// session listener; entries self-wipe immediately on read or after 20 seconds.
-const stagedPasswords = new Map<string, { password: string; expiresAt: number }>();
-
-function setStagedPassword(email: string, password: string): void {
-  const key = email.trim().toLowerCase();
-  stagedPasswords.set(key, { password, expiresAt: Date.now() + 20_000 });
-}
-
-function consumeStagedPassword(email: string | null): string | null {
-  if (!email) return null;
-  const key = email.trim().toLowerCase();
-  const entry = stagedPasswords.get(key);
-  stagedPasswords.delete(key);
-  if (!entry || entry.expiresAt < Date.now()) return null;
-  return entry.password;
-}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -77,8 +66,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const userId = user?.id ?? null;
   const userEmail = user?.email ?? null;
 
-  const stageLoginPassword = useCallback((email: string, password: string) => {
-    setStagedPassword(email, password);
+  const stagePassword = useCallback((email: string, password: string) => {
+    stageLoginPassword(email, password);
+  }, []);
+  const discardPassword = useCallback((email: string) => {
+    discardStagedPassword(email);
   }, []);
 
   useEffect(() => {
@@ -129,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') setHadRecoverySession(true);
       if (event === 'SIGNED_OUT') {
         clearIdentityMemoryCache();
-        stagedPasswords.clear();
+        clearStagedPasswords();
         setProfile(null);
         setIdentity(null);
         setVaultLocked(false);
@@ -288,7 +280,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     clearIdentityMemoryCache();
-    stagedPasswords.clear();
+    clearStagedPasswords();
     if (!supabase) return;
     await supabase.auth.signOut({ scope: 'local' });
   }, []);
@@ -306,7 +298,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       vaultLocked,
       profileError,
       hadRecoverySession,
-      stageLoginPassword,
+      stageLoginPassword: stagePassword,
+      discardStagedLoginPassword: discardPassword,
       unlockKeyVault,
       rotateIdentityWithPassword,
       refreshProfile,
@@ -321,7 +314,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       vaultLocked,
       profileError,
       hadRecoverySession,
-      stageLoginPassword,
+      stagePassword,
+      discardPassword,
       unlockKeyVault,
       rotateIdentityWithPassword,
       refreshProfile,

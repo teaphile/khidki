@@ -7,7 +7,7 @@ import { formatClock, formatRemaining } from '../../lib/format';
 import {
   Check,
   CheckCheck,
-  Clock3,
+  Hourglass,
   Download,
   FileText,
   Image as ImageIcon,
@@ -149,14 +149,17 @@ export function MessageBubble({
           {remaining !== null ? (
             <span
               className={`timer${remaining <= 20_000 ? ' timer--urgent' : ''}`}
-              title="Seen · auto-cleans when timer reaches 0:00"
+              title="Auto-deletes when the reading timer reaches 0:00"
             >
-              <Clock3 size={11} aria-hidden="true" />
-              Seen · {formatRemaining(remaining)}
+              <Hourglass size={11} aria-hidden="true" />
+              Auto-delete · {formatRemaining(remaining)}
             </span>
           ) : (
-            <span className="timer timer--waiting" title="Stays encrypted until seen">
-              Waiting to be seen
+            <span
+              className="timer timer--waiting"
+              title="This message stays encrypted until the recipient reads it"
+            >
+              Waiting to be read
             </span>
           )}
           {message.mine ? (

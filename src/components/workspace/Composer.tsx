@@ -12,7 +12,13 @@ import {
   prepareAttachmentFile,
 } from '../../lib/files';
 
-export function Composer({ allowAttachments = true }: { allowAttachments?: boolean }) {
+export function Composer({
+  allowAttachments = true,
+  enterToSend = true,
+}: {
+  allowAttachments?: boolean;
+  enterToSend?: boolean;
+}) {
   const { activeId, sendText, sendFile } = useChat();
   const { toast } = useToast();
   const [text, setText] = useState('');
@@ -104,12 +110,8 @@ export function Composer({ allowAttachments = true }: { allowAttachments?: boole
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const isCoarsePointer =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(pointer: coarse)').matches;
-
-    if (event.key === 'Enter' && !event.shiftKey && !isCoarsePointer) {
+    const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+    if (event.key === 'Enter' && enterToSend && !event.shiftKey && !isComposing) {
       event.preventDefault();
       void submit();
     }
@@ -134,7 +136,7 @@ export function Composer({ allowAttachments = true }: { allowAttachments?: boole
           )}
           <div className="composer__file-meta">
             <strong className="truncate">{file.name}</strong>
-            <span>{formatBytes(file.size)} · Encrypted · Clears 1m after seen</span>
+            <span>{formatBytes(file.size)} · Encrypted · Auto-deletes 1 minute after reading</span>
           </div>
           <button
             type="button"

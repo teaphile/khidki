@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   ChevronRight,
-  Clock3,
+  Hourglass,
   Inbox,
   Plus,
   RefreshCw,
@@ -93,8 +93,8 @@ export function ConversationList({
               ? 'Connecting...'
               : 'Offline'}
         </span>
-        <span className="panel__ttl">
-          <Clock3 size={13} aria-hidden="true" /> Clears 1m after seen
+        <span className="panel__ttl" title="Messages auto-delete one minute after reading">
+          <Hourglass size={13} aria-hidden="true" /> Auto-delete after 1 minute
         </span>
       </div>
 
@@ -180,7 +180,7 @@ export function ConversationList({
                   ? `Attachment: ${last.attachment?.name ?? 'File'}`
                   : (last.text ?? '')
                 : isPendingOutgoing
-                  ? 'Request sent · waiting for reply'
+                  ? 'Request pending · no expiry'
                   : handle;
               const time = last
                 ? formatListTime(last.createdAt)
@@ -211,7 +211,12 @@ export function ConversationList({
                             {unreadCount > 99 ? '99+' : unreadCount}
                           </span>
                         ) : isPendingOutgoing ? (
-                          <span className="pending-pill">Sent</span>
+                          <span
+                            className="pending-pill"
+                            title="Pending with no expiry. Open this chat to cancel."
+                          >
+                            Pending
+                          </span>
                         ) : null}
                       </span>
                     </span>

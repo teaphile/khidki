@@ -68,7 +68,8 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     expect(container.textContent).not.toContain('+');
     expect(container.textContent).not.toContain('—');
     expect(container.textContent).toMatch(/End-to-end encrypted/i);
-    expect(container.textContent).toMatch(/1m after seen|one minute/i);
+    expect(container.textContent).toContain('Auto-delete after 1 minute');
+    expect(container.textContent).not.toMatch(/clears 1m after seen/i);
   });
 
   it('replaces preset stickers with a clean Profile photo control and uses aum / aum01 placeholders on sign up', async () => {
@@ -119,7 +120,7 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     expect(usernameInput?.minLength).toBe(3);
   });
 
-  it('renders unseen messages as Waiting to be seen without edit or delete buttons', async () => {
+  it('renders unread messages as Waiting to be read without edit or delete buttons', async () => {
     const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
     await act(async () => {
       root.render(
@@ -144,7 +145,7 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     });
 
     expect(container.textContent).toContain('Still waiting safely after 3 days offline');
-    expect(container.textContent).toContain('Waiting to be seen');
+    expect(container.textContent).toContain('Waiting to be read');
     expect(container.textContent).not.toMatch(/edit|delete/i);
   });
 
