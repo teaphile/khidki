@@ -19,7 +19,7 @@ for (const theme of ['light', 'dark'] as const) {
 
       const label = `${viewport.label} (${theme})`;
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-      await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
 
       await expectNoHorizontalOverflow(page, `${label} sign in`);
       await expectFullyVisible(page, '.auth-card', `${label} sign in`);
@@ -28,9 +28,7 @@ for (const theme of ['light', 'dark'] as const) {
       await expectNoOverlap(page, '.auth-card__heading', '.auth-tabs', `${label} sign in`);
 
       await page.getByRole('tab', { name: 'Sign up' }).click();
-      await expect(
-        page.getByRole('heading', { name: 'Start a private conversation' }),
-      ).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Create your Khidki profile' })).toBeVisible();
 
       await expectNoHorizontalOverflow(page, `${label} sign up`);
       await expectFullyVisible(page, '.auth-card', `${label} sign up`);
@@ -51,7 +49,7 @@ for (const theme of ['light', 'dark'] as const) {
 
       await page.goto('/reset-password');
       await expect(
-        page.getByRole('heading', { name: 'This reset link is invalid or expired.' }),
+        page.getByRole('heading', { name: 'This reset link is invalid or expired' }),
       ).toBeVisible();
 
       await expectNoHorizontalOverflow(page, `${label} reset password`);
@@ -71,7 +69,7 @@ test('theme switching does not disturb the layout', async ({ page }) => {
   ]) {
     await page.setViewportSize(viewport);
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Sign in to Sotto' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Sign in to Khidki' })).toBeVisible();
 
     const label = `${viewport.width}x${viewport.height}`;
     await expectNoHorizontalOverflow(page, `${label} light`);

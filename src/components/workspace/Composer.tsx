@@ -1,228 +1,206 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
-import { FileText, Image as ImageIcon, Loader2, Paperclip, Send, X } from 'lucide-react';
-import { ACCEPTED_FILE_TYPES, formatBytes, inspectFile, MAX_FILE_BYTES } from '../../lib/files';
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import { FileText, Image as ImageIcon, Loader2, Paperclip, Send, Video, X } from 'lucide-react';
+import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
+import {
+  ACCEPTED_FILE_TYPES,
+  formatBytes,
+  isImageMime,
+  isVideoMime,
+  MAX_FILE_BYTES,
+  prepareAttachmentFile,
+} from '../../lib/files';
 
-type PendingFile = {
-  file: File;
-  name: string;
-  size: number;
-  mime: string;
-  preview?: string;
-};
-
-export function Composer({
-  onSendText,
-  onSendFile,
-  onTyping,
-}: {
-  onSendText: (text: string) => Promise<void>;
-  onSendFile: (file: File, caption: string) => Promise<void>;
-  onTyping?: () => void;
-}) {
+export function Composer({ allowAttachments = true }: { allowAttachments?: boolean }) {
+  const { activeId, sendText, sendFile } = useChat();
   const { toast } = useToast();
-  const [draft, setDraft] = useState('');
-  const [pending, setPending] = useState<PendingFile | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const pendingRef = useRef<PendingFile | null>(null);
+  const [text, setText] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [preparingFile, setPreparingFile] = useState(false);
+  const [sending, setSending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    pendingRef.current = pending;
-  }, [pending]);
+    setText('');
+    setFile(null);
+    setPreviewUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+  }, [activeId]);
 
   useEffect(() => {
     return () => {
-      if (pendingRef.current?.preview) URL.revokeObjectURL(pendingRef.current.preview);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
-  }, []);
+  }, [previewUrl]);
 
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 152)}px`;
-  }, [draft]);
+    const node = textareaRef.current;
+    if (!node) return;
+    node.style.height = '0px';
+    node.style.height = `${Math.min(132, Math.max(24, node.scrollHeight))}px`;
+  }, [text]);
 
-  const chooseFile = async (file: File) => {
-    if (file.size > MAX_FILE_BYTES) {
-      toast('Files are limited to 2 MB because they travel through realtime channels.', 'error');
-      return;
-    }
-    const inspection = await inspectFile(file);
-    if (!inspection.ok) {
-      toast(inspection.error, 'error');
-      return;
-    }
-    if (pending?.preview) URL.revokeObjectURL(pending.preview);
-    const preview = inspection.mime.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-    setPending({
-      file,
-      name: inspection.name,
-      size: file.size,
-      mime: inspection.mime,
-      preview,
+  const clearFile = () => {
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setPreviewUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
     });
-    textareaRef.current?.focus();
   };
 
-  const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (file) void chooseFile(file);
-  };
-
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) void chooseFile(file);
-  };
-
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const file = event.clipboardData.files?.[0];
-    if (!file) return;
-    event.preventDefault();
-    void chooseFile(file);
-  };
-
-  const removePending = () => {
-    if (pending?.preview) URL.revokeObjectURL(pending.preview);
-    setPending(null);
-  };
-
-  const send = async () => {
-    if (busy) return;
-    const attachment = pending;
-    const text = draft.trim();
-    if (!attachment && !text) return;
-    setBusy(true);
+  const onChooseFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const chosen = event.target.files?.[0];
+    if (!chosen) return;
+    setPreparingFile(true);
     try {
-      if (attachment) {
-        await onSendFile(attachment.file, text);
-        if (attachment.preview) URL.revokeObjectURL(attachment.preview);
-        setPending(null);
-      } else {
-        await onSendText(text);
+      const prepared = await prepareAttachmentFile(chosen);
+      if (!prepared.ok) {
+        toast(prepared.error, 'error');
+        event.target.value = '';
+        return;
       }
-      setDraft('');
-      textareaRef.current?.focus();
+      setPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return isImageMime(prepared.mime) ? URL.createObjectURL(prepared.file) : null;
+      });
+      setFile(prepared.file);
+    } finally {
+      setPreparingFile(false);
+    }
+  };
+
+  const submit = async () => {
+    if (sending || preparingFile) return;
+    const trimmed = text.trim();
+    if (!trimmed && !file) return;
+
+    setSending(true);
+    try {
+      if (file) {
+        await sendFile(file, trimmed || undefined);
+        clearFile();
+        setText('');
+      } else {
+        await sendText(trimmed);
+        setText('');
+      }
     } catch (error) {
       toast(error instanceof Error ? error.message : 'The message could not be sent.', 'error');
     } finally {
-      setBusy(false);
+      setSending(false);
+      textareaRef.current?.focus();
     }
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void send();
+    void submit();
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const isCoarsePointer =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches;
+
+    if (event.key === 'Enter' && !event.shiftKey && !isCoarsePointer) {
+      event.preventDefault();
+      void submit();
+    }
   };
 
   return (
-    <div
-      className={`composer${dragging ? ' composer--dragging' : ''}`}
-      onDragOver={(event) => {
-        event.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={(event) => {
-        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-        setDragging(false);
-      }}
-      onDrop={onDrop}
-    >
-      {pending ? (
-        <div className="attachment-tray">
-          <div className="attachment-tray__preview">
-            {pending.preview ? (
-              <img src={pending.preview} alt="" />
-            ) : (
-              <span className="attachment-tray__icon">
-                {pending.mime.startsWith('image/') ? (
-                  <ImageIcon size={18} aria-hidden="true" />
-                ) : (
-                  <FileText size={18} aria-hidden="true" />
-                )}
-              </span>
-            )}
-          </div>
-          <div className="attachment-tray__details">
-            <strong>{pending.name}</strong>
-            <span>{formatBytes(pending.size)} · expires with this message</span>
+    <form className="composer" onSubmit={onSubmit}>
+      {file ? (
+        <div className="composer__attachment">
+          {previewUrl ? (
+            <img src={previewUrl} alt="" className="composer__thumb" />
+          ) : (
+            <span className="composer__file-icon">
+              {isImageMime(file.type) ? (
+                <ImageIcon size={18} aria-hidden="true" />
+              ) : isVideoMime(file.type) ? (
+                <Video size={18} aria-hidden="true" />
+              ) : (
+                <FileText size={18} aria-hidden="true" />
+              )}
+            </span>
+          )}
+          <div className="composer__file-meta">
+            <strong className="truncate">{file.name}</strong>
+            <span>{formatBytes(file.size)} · Encrypted · Clears 1m after seen</span>
           </div>
           <button
             type="button"
             className="icon-button icon-button--small"
-            onClick={removePending}
+            onClick={clearFile}
             aria-label="Remove attachment"
-            disabled={busy}
+            disabled={sending}
           >
             <X size={16} aria-hidden="true" />
           </button>
         </div>
       ) : null}
 
-      <div className="composer__row">
+      <div className="composer__bar">
         <input
           ref={fileInputRef}
           type="file"
-          className="visually-hidden"
           accept={ACCEPTED_FILE_TYPES}
-          onChange={onFileChange}
+          onChange={(event) => void onChooseFile(event)}
+          className="visually-hidden"
           tabIndex={-1}
         />
         <button
           type="button"
-          className="icon-button composer__attach"
+          className="icon-button"
           onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach a file"
-          title="Attach a file (max 2 MB)"
-          disabled={busy}
+          disabled={sending || preparingFile || !allowAttachments}
+          aria-label="Attach photo or file"
+          title={
+            allowAttachments
+              ? `Attach photo or file (up to ${formatBytes(MAX_FILE_BYTES)}, photos compress automatically)`
+              : 'Attachments unlock after request is accepted'
+          }
         >
-          <Paperclip size={20} aria-hidden="true" />
+          {preparingFile ? (
+            <Loader2 className="spin" size={18} aria-hidden="true" />
+          ) : (
+            <Paperclip size={19} aria-hidden="true" />
+          )}
         </button>
 
-        <div className="composer__field">
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              onTyping?.();
-            }}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            placeholder="Write a message…"
-            aria-label="Message"
-            rows={1}
-            maxLength={4000}
-          />
-          <span className="composer__hint">Enter to send · Shift + Enter for a new line</span>
-        </div>
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={onKeyDown}
+          maxLength={4000}
+          placeholder={file ? 'Add an optional caption...' : 'Write an encrypted message...'}
+          aria-label="Message"
+          disabled={sending}
+        />
 
         <button
-          type="button"
-          className="composer__send"
-          onClick={() => void send()}
-          disabled={busy || (!draft.trim() && !pending)}
+          type="submit"
+          className="send-button"
+          disabled={sending || preparingFile || (!text.trim() && !file)}
           aria-label="Send message"
         >
-          {busy ? (
-            <Loader2 className="spin" size={19} aria-hidden="true" />
+          {sending ? (
+            <Loader2 className="spin" size={18} aria-hidden="true" />
           ) : (
-            <Send size={19} aria-hidden="true" />
+            <Send size={17} aria-hidden="true" />
           )}
         </button>
       </div>
-      <div className="composer__meta">
-        <span>Messages and files vanish after 2 minutes.</span>
-        <span>{draft.length > 3500 ? `${draft.length}/4000` : 'Files up to 2 MB'}</span>
-      </div>
-    </div>
+    </form>
   );
 }

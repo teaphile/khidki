@@ -7,9 +7,8 @@ import { expectNoHorizontalOverflow, setStoredTheme, VIEWPORTS } from './helpers
  * Enable it with all four variables:
  *   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, E2E_EMAIL, E2E_PASSWORD
  *
- * Use a dedicated, throwaway account. Sotto binds an account to the device key
- * in the current browser profile, so this test intentionally provisions a new
- * identity for whichever account it signs in to.
+ * Use a dedicated test account. Khidki restores the encrypted cloud key vault
+ * using the account password when signing in on a fresh browser profile.
  */
 const email = process.env.E2E_EMAIL;
 const password = process.env.E2E_PASSWORD;
@@ -49,25 +48,24 @@ test.describe('authenticated workspace layout', () => {
 
       await expectNoHorizontalOverflow(page, `${label} chats`, [
         '.rail *',
-        '.list-pane *',
-        '.chat-pane *',
+        '.sidebar *',
+        '.stage *',
         '.mobile-nav *',
       ]);
 
-      // People discovery is the widest list-pane state (search field + actions).
       if (viewport.width < 880) {
         await page
           .getByRole('navigation', { name: 'Mobile navigation' })
           .getByRole('button', { name: 'People' })
           .click();
       } else {
-        await page.getByRole('button', { name: 'Discover people' }).click();
+        await page.getByRole('button', { name: 'People', exact: true }).click();
       }
-      await expect(page.getByRole('heading', { name: /find people/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'People', exact: true })).toBeVisible();
       await expectNoHorizontalOverflow(page, `${label} people`, [
         '.rail *',
-        '.list-pane *',
-        '.chat-pane *',
+        '.sidebar *',
+        '.stage *',
         '.mobile-nav *',
       ]);
 
@@ -81,14 +79,13 @@ test.describe('authenticated workspace layout', () => {
       }
     }
 
-    // Desktop theme switching must not reflow the workspace into overflow.
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: 'Switch to dark theme' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expectNoHorizontalOverflow(page, '1440x900 workspace dark', [
       '.rail *',
-      '.list-pane *',
-      '.chat-pane *',
+      '.sidebar *',
+      '.stage *',
     ]);
   });
 });

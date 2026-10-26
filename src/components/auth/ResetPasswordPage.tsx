@@ -17,7 +17,7 @@ import { LogoMark } from '../ui/LogoMark';
 import { ThemeToggle } from '../ui/ThemeToggle';
 
 export function ResetPasswordPage() {
-  const { session, signOut } = useAuth();
+  const { session, rotateIdentityWithPassword, signOut } = useAuth();
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -37,6 +37,7 @@ export function ResetPasswordPage() {
       if (password !== confirmPassword) throw new Error('Passwords do not match.');
       const { error: updateError } = await supabase.auth.updateUser({ password: parsed.data });
       if (updateError) throw updateError;
+      await rotateIdentityWithPassword(parsed.data).catch(() => undefined);
       setDone(true);
       await signOut();
     } catch (caught) {
@@ -49,9 +50,9 @@ export function ResetPasswordPage() {
   return (
     <div className="auth-shell auth-shell--centered">
       <header className="auth-topbar">
-        <a className="brand brand--link" href="/" aria-label="Sotto home">
+        <a className="brand brand--link" href="/" aria-label="Khidki home">
           <LogoMark />
-          <span>Sotto</span>
+          <span>Khidki</span>
         </a>
         <ThemeToggle />
       </header>
@@ -64,8 +65,11 @@ export function ResetPasswordPage() {
                 <CheckCircle2 size={24} aria-hidden="true" />
               </span>
               <span className="eyebrow">Password updated</span>
-              <h2>Your account is secure.</h2>
-              <p>Sign in again with your new password to continue.</p>
+              <h2>Your account is secure</h2>
+              <p>
+                Your password and encryption key vault have been refreshed. Sign in with your new
+                password to continue.
+              </p>
               <button
                 type="button"
                 className="button button--primary button--wide"
@@ -80,7 +84,7 @@ export function ResetPasswordPage() {
                 <ShieldAlert size={24} aria-hidden="true" />
               </span>
               <span className="eyebrow">Link unavailable</span>
-              <h2>This reset link is invalid or expired.</h2>
+              <h2>This reset link is invalid or expired</h2>
               <p>Request a new password reset link from the sign-in screen.</p>
               <button
                 type="button"

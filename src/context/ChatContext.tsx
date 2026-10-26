@@ -9,56 +9,73 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import type { ChatMessage, Conversation, Identity, PeopleResult, Profile } from '../types';
+import type {
+  ChatMessage,
+  Conversation,
+  ConversationMember,
+  Identity,
+  PeopleResult,
+  Profile,
+  StoredMessageRow,
+} from '../types';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import {
+  acceptMessageRequest,
   addGroupMember as addGroupMemberRequest,
   createGroup as createGroupRequest,
+  declineMessageRequest,
   fetchConversations,
+  fetchStoredMessages,
   fetchWrappedKey,
   leaveGroup as leaveGroupRequest,
+  markConversationSeen,
+  purgeExpiredMessages,
   removeGroupMember as removeGroupMemberRequest,
   renameGroup as renameGroupRequest,
+  sendEncryptedMessage,
   setConversationKeys,
   startDm,
 } from '../lib/data';
-import { generateConversationKey, unwrapConversationKey, wrapConversationKey } from '../lib/crypto';
-import type { ChunkWire, FilePlain, MessageWire } from '../lib/messaging';
+import type { SeenMessageReceipt } from '../lib/data';
 import {
-  chunkPayloadSchema,
-  clampExpiry,
-  decryptChunkWire,
-  decryptMessageWire,
-  encryptChunkWire,
-  encryptFileMetaWire,
-  encryptTextWire,
-  FILE_CHUNK_BYTES,
-  MESSAGE_TTL_MS,
-  messagePayloadSchema,
-  verifyChunkWire,
-  verifyMessageWire,
+  generateConversationKey,
+  randomId,
+  unwrapConversationKey,
+  wrapConversationKey,
+} from '../lib/crypto';
+import {
+  packStoredFileMessage,
+  packStoredTextMessage,
+  resolveSeenTimers,
+  unpackStoredMessage,
 } from '../lib/messaging';
-import { inspectFile } from '../lib/files';
+import { prepareAttachmentFile } from '../lib/files';
 import { messageTextSchema } from '../lib/validation';
 import { requireSupabase } from '../lib/env';
-import { closeOutboundChannels, sendUserEvent } from '../lib/realtime';
+import { closeOutboundChannels, sendUserEvent, setRealtimeSelfUserId } from '../lib/realtime';
 
 type ConnectionState = 'connecting' | 'connected' | 'offline';
 type UserEventHandler = (event: string, payload: unknown) => void;
 
 type ChatContextValue = {
   conversations: Conversation[];
+  activeChats: Conversation[];
+  incomingRequests: Conversation[];
   conversationsLoading: boolean;
   conversationsError: string | null;
   activeId: string | null;
   activeConversation: Conversation | null;
   messages: Record<string, ChatMessage[]>;
   unread: Record<string, number>;
+  totalUnreadChats: number;
+  incomingRequestCount: number;
   connection: ConnectionState;
   setActiveId: (id: string | null) => void;
   refreshConversations: (silent?: boolean) => Promise<Conversation[]>;
   startDirectMessage: (person: PeopleResult) => Promise<string>;
+  acceptRequest: (conversationId: string) => Promise<void>;
+  declineRequest: (conversationId: string) => Promise<void>;
   createGroupChat: (title: string, people: PeopleResult[]) => Promise<string>;
   sendText: (text: string) => Promise<void>;
   sendFile: (file: File, caption?: string) => Promise<void>;
@@ -78,6 +95,7 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 
 const USER_EVENTS = [
   'conversation-updated',
+  'messages-seen',
   'call-offer',
   'call-answer',
   'call-ice',
@@ -85,19 +103,8 @@ const USER_EVENTS = [
   'call-end',
 ];
 
-const TRANSFER_EVENTS = ['message', 'file-meta', 'file-chunk', 'key-rotated'];
-
-type TransferState = {
-  meta: FilePlain;
-  wire: MessageWire;
-  chunks: Array<Uint8Array | undefined>;
-  received: number;
-  createdAt: number;
-};
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
+const CONVERSATION_EVENTS = ['message-stored', 'messages-seen', 'key-rotated'];
+const MAX_MESSAGES_PER_CONVERSATION = 200;
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -106,6 +113,15 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function sortMessages(list: ChatMessage[]): ChatMessage[] {
   return [...list].sort((left, right) => left.createdAt - right.createdAt);
+}
+
+function isIncomingRequest(conversation: Conversation, myId: string): boolean {
+  return (
+    conversation.kind === 'dm' &&
+    conversation.requestStatus === 'pending' &&
+    conversation.requestedBy !== null &&
+    conversation.requestedBy !== myId
+  );
 }
 
 function ChatSession({
@@ -123,7 +139,6 @@ function ChatSession({
   const [conversationsError, setConversationsError] = useState<string | null>(null);
   const [activeId, setActiveIdState] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
-  const [unread, setUnread] = useState<Record<string, number>>({});
   const [connection, setConnection] = useState<ConnectionState>(
     navigator.onLine ? 'connecting' : 'offline',
   );
@@ -131,15 +146,23 @@ function ChatSession({
   const conversationsRef = useRef<Conversation[]>([]);
   const activeIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Record<string, ChatMessage[]>>({});
-  const transferRef = useRef<Map<string, TransferState>>(new Map());
   const keysRef = useRef<Map<string, string>>(new Map());
+  const decryptedRef = useRef<Map<string, ChatMessage>>(new Map());
   const channelsRef = useRef<Map<string, RealtimeChannel>>(new Map());
+  const userChannelRef = useRef<RealtimeChannel | null>(null);
   const userListenersRef = useRef<Set<UserEventHandler>>(new Set());
-  const refreshRef = useRef<(silent?: boolean) => Promise<Conversation[]>>(async () => []);
-  const handleMessageRef = useRef<(conversationId: string, payload: unknown) => void>(() => {});
-  const handleFileMetaRef = useRef<(conversationId: string, payload: unknown) => void>(() => {});
-  const handleChunkRef = useRef<(conversationId: string, payload: unknown) => void>(() => {});
-  const handleKeyRotatedRef = useRef<(conversationId: string) => void>(() => {});
+  const syncInFlightRef = useRef<Promise<void> | null>(null);
+  const syncQueuedRef = useRef(false);
+  const markingSeenRef = useRef<Set<string>>(new Set());
+  const lastServerPurgeRef = useRef(0);
+  const purgeTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setRealtimeSelfUserId(profile.id);
+    return () => {
+      setRealtimeSelfUserId(null);
+    };
+  }, [profile.id]);
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -163,34 +186,6 @@ function ChatSession({
   const setActiveId = useCallback((id: string | null) => {
     activeIdRef.current = id;
     setActiveIdState(id);
-    if (id) {
-      setUnread((current) => (current[id] ? { ...current, [id]: 0 } : current));
-    }
-  }, []);
-
-  const refreshConversations = useCallback(async (silent = false): Promise<Conversation[]> => {
-    if (!silent) {
-      setConversationsLoading(true);
-      setConversationsError(null);
-    }
-    try {
-      const next = await fetchConversations();
-      conversationsRef.current = next;
-      setConversations(next);
-      setConversationsError(null);
-      const currentActive = activeIdRef.current;
-      if (currentActive && !next.some((conversation) => conversation.id === currentActive)) {
-        activeIdRef.current = null;
-        setActiveIdState(null);
-      }
-      return next;
-    } catch (error) {
-      const message = errorMessage(error, 'Unable to load conversations.');
-      if (!silent) setConversationsError(message);
-      throw error;
-    } finally {
-      if (!silent) setConversationsLoading(false);
-    }
   }, []);
 
   const findConversation = useCallback(
@@ -220,20 +215,11 @@ function ChatSession({
     [identity.ecdh.privateKey],
   );
 
-  const sendConversationEvent = useCallback(
-    async (
-      conversationId: string,
-      event: string,
-      payload: Record<string, unknown>,
-    ): Promise<void> => {
+  const broadcastConversationEvent = useCallback(
+    async (conversationId: string, event: string, payload: Record<string, unknown>) => {
       const channel = channelsRef.current.get(conversationId);
-      if (!channel) throw new Error('This conversation is not connected yet.');
-      for (let attempt = 0; attempt < 60 && channel.state !== 'joined'; attempt += 1) {
-        await delay(100);
-      }
-      if (channel.state !== 'joined') throw new Error('The realtime connection is not ready.');
-      const result = await channel.send({ type: 'broadcast', event, payload });
-      if (result !== 'ok') throw new Error('The message could not be sent.');
+      if (!channel || channel.state !== 'joined') return;
+      await channel.send({ type: 'broadcast', event, payload }).catch(() => undefined);
     },
     [],
   );
@@ -258,7 +244,7 @@ function ChatSession({
             wrap_iv: wrapped.iv,
           });
         } catch {
-          // A malformed peer key must not block the whole conversation.
+          // Skip malformed peer keys safely.
         }
       }
 
@@ -270,12 +256,12 @@ function ChatSession({
 
       await setConversationKeys(conversation.id, keys);
       keysRef.current.set(conversation.id, key);
-      void sendConversationEvent(conversation.id, 'key-rotated', {
+      void broadcastConversationEvent(conversation.id, 'key-rotated', {
         senderId: profile.id,
-      }).catch(() => undefined);
+      });
       return key;
     },
-    [identity, profile.id, sendConversationEvent],
+    [broadcastConversationEvent, identity.ecdh.privateKey, profile.id],
   );
 
   const ensureKeyForSend = useCallback(
@@ -298,305 +284,348 @@ function ChatSession({
     [unwrapKeyRow],
   );
 
-  const markMessage = useCallback(
-    (conversationId: string, messageId: string, patch: Partial<ChatMessage>) => {
+  const hydrateRow = useCallback(
+    async (
+      row: StoredMessageRow,
+      conversationList: Conversation[],
+    ): Promise<ChatMessage | null> => {
+      const { seenAt, expiresAt } = resolveSeenTimers(row.seen_at, row.expires_at);
+      if (expiresAt !== null && expiresAt <= Date.now()) {
+        const cached = decryptedRef.current.get(row.id);
+        if (cached?.attachment?.url) URL.revokeObjectURL(cached.attachment.url);
+        decryptedRef.current.delete(row.id);
+        return null;
+      }
+
+      const seenBy = Array.isArray(row.seen_by) ? row.seen_by : [];
+      const existing = decryptedRef.current.get(row.id);
+      if (existing) {
+        const updated: ChatMessage = {
+          ...existing,
+          seenAt,
+          expiresAt,
+          seenBy,
+          status: seenAt !== null ? 'seen' : 'sent',
+        };
+        decryptedRef.current.set(row.id, updated);
+        return updated;
+      }
+
+      const conversation = conversationList.find((item) => item.id === row.conversation_id);
+      if (!conversation) return null;
+
+      const member: ConversationMember | undefined = conversation.members.find(
+        (item) => item.userId === row.sender_id,
+      );
+      if (!member?.publicKey) return null;
+
+      let key = await loadKeyForReceive(row.conversation_id);
+      if (!key) return null;
+
+      let unpacked = await unpackStoredMessage(row, key, member.publicKey);
+      if (!unpacked) {
+        key = await loadKeyForReceive(row.conversation_id, true);
+        if (!key) return null;
+        unpacked = await unpackStoredMessage(row, key, member.publicKey);
+      }
+      if (!unpacked) return null;
+
+      const createdAt = Number.isFinite(row.client_created_at)
+        ? row.client_created_at
+        : Date.parse(row.created_at) || Date.now();
+
+      let message: ChatMessage;
+      if (unpacked.kind === 'text') {
+        message = {
+          id: row.id,
+          conversationId: row.conversation_id,
+          senderId: row.sender_id,
+          senderName: member.displayName,
+          kind: 'text',
+          text: unpacked.text,
+          createdAt,
+          seenAt,
+          expiresAt,
+          seenBy,
+          mine: row.sender_id === profile.id,
+          status: seenAt !== null ? 'seen' : 'sent',
+        };
+      } else {
+        const blob = new Blob([unpacked.bytes], { type: unpacked.mime });
+        const url = URL.createObjectURL(blob);
+        message = {
+          id: row.id,
+          conversationId: row.conversation_id,
+          senderId: row.sender_id,
+          senderName: member.displayName,
+          kind: 'file',
+          text: unpacked.caption,
+          attachment: {
+            id: row.id,
+            name: unpacked.name,
+            mime: unpacked.mime,
+            size: unpacked.size,
+            url,
+            progress: 100,
+          },
+          createdAt,
+          seenAt,
+          expiresAt,
+          seenBy,
+          mine: row.sender_id === profile.id,
+          status: seenAt !== null ? 'seen' : 'sent',
+        };
+      }
+
+      decryptedRef.current.set(row.id, message);
+      return message;
+    },
+    [loadKeyForReceive, profile.id],
+  );
+
+  const syncAll = useCallback(
+    async (silent = true): Promise<Conversation[]> => {
+      if (!silent) {
+        setConversationsLoading(true);
+        setConversationsError(null);
+      }
+      try {
+        const [nextConversations, rows] = await Promise.all([
+          fetchConversations(),
+          fetchStoredMessages(),
+        ]);
+        conversationsRef.current = nextConversations;
+        setConversations(nextConversations);
+        setConversationsError(null);
+
+        const currentActive = activeIdRef.current;
+        if (
+          currentActive &&
+          !nextConversations.some((conversation) => conversation.id === currentActive)
+        ) {
+          activeIdRef.current = null;
+          setActiveIdState(null);
+        }
+
+        const hydrated = await Promise.all(rows.map((row) => hydrateRow(row, nextConversations)));
+        const activeRowIds = new Set<string>();
+        const grouped: Record<string, ChatMessage[]> = {};
+
+        for (const msg of hydrated) {
+          if (!msg) continue;
+          activeRowIds.add(msg.id);
+          const bucket = grouped[msg.conversationId] ?? [];
+          bucket.push(msg);
+          grouped[msg.conversationId] = bucket;
+        }
+
+        // Preserve any optimistic 'sending' messages not yet returned by the server
+        for (const [convId, list] of Object.entries(messagesRef.current)) {
+          for (const msg of list) {
+            if (msg.status === 'sending' && !activeRowIds.has(msg.id)) {
+              const bucket = grouped[convId] ?? [];
+              bucket.push(msg);
+              grouped[convId] = bucket;
+              activeRowIds.add(msg.id);
+            }
+          }
+        }
+
+        // Revoke object URLs for messages that expired or were removed on the server
+        for (const [id, cached] of decryptedRef.current) {
+          if (!activeRowIds.has(id)) {
+            if (cached.attachment?.url) URL.revokeObjectURL(cached.attachment.url);
+            decryptedRef.current.delete(id);
+          }
+        }
+
+        const nextMessages: Record<string, ChatMessage[]> = {};
+        for (const [convId, bucket] of Object.entries(grouped)) {
+          const sorted = sortMessages(bucket);
+          nextMessages[convId] =
+            sorted.length > MAX_MESSAGES_PER_CONVERSATION
+              ? sorted.slice(sorted.length - MAX_MESSAGES_PER_CONVERSATION)
+              : sorted;
+        }
+
+        messagesRef.current = nextMessages;
+        setMessages(nextMessages);
+        return nextConversations;
+      } catch (error) {
+        const message = errorMessage(error, 'Unable to load conversations.');
+        if (!silent) setConversationsError(message);
+        throw error;
+      } finally {
+        if (!silent) setConversationsLoading(false);
+      }
+    },
+    [hydrateRow],
+  );
+
+  const scheduleSync = useCallback(() => {
+    if (syncInFlightRef.current) {
+      syncQueuedRef.current = true;
+      return;
+    }
+    const run = async () => {
+      try {
+        do {
+          syncQueuedRef.current = false;
+          try {
+            await syncAll(true);
+          } catch {
+            // Keep current UI state on transient offline glitches.
+          }
+        } while (syncQueuedRef.current);
+      } finally {
+        syncInFlightRef.current = null;
+      }
+    };
+    syncInFlightRef.current = run();
+  }, [syncAll]);
+
+  const refreshConversations = useCallback(
+    async (silent = false): Promise<Conversation[]> => syncAll(silent),
+    [syncAll],
+  );
+
+  const applySeenReceipts = useCallback(
+    (conversationId: string, receipts: SeenMessageReceipt[]) => {
+      if (!receipts.length) return;
+      const byId = new Map(receipts.map((item) => [item.id, item]));
       updateMessages((current) => {
         const list = current[conversationId];
         if (!list) return current;
         let changed = false;
-        const next = list.map((message) => {
-          if (message.id !== messageId) return message;
+        const next = list.map((msg) => {
+          const receipt = byId.get(msg.id);
+          if (!receipt) return msg;
+          const { seenAt, expiresAt } = resolveSeenTimers(receipt.seen_at, receipt.expires_at);
+          const nextSeenBy = Array.isArray(receipt.seen_by)
+            ? receipt.seen_by
+            : msg.seenBy?.includes(profile.id)
+              ? msg.seenBy
+              : [...(msg.seenBy ?? []), profile.id];
+          if (
+            msg.seenAt === seenAt &&
+            msg.expiresAt === expiresAt &&
+            msg.seenBy?.length === nextSeenBy.length
+          ) {
+            return msg;
+          }
           changed = true;
-          return { ...message, ...patch };
+          const updated: ChatMessage = {
+            ...msg,
+            seenAt,
+            expiresAt,
+            seenBy: nextSeenBy,
+            status: seenAt !== null ? 'seen' : msg.status,
+          };
+          decryptedRef.current.set(msg.id, updated);
+          return updated;
         });
         return changed ? { ...current, [conversationId]: next } : current;
       });
     },
-    [updateMessages],
+    [profile.id, updateMessages],
   );
 
-  const removeMessage = useCallback(
-    (conversationId: string, messageId: string) => {
-      let url: string | undefined;
-      updateMessages((current) => {
-        const list = current[conversationId];
-        if (!list) return current;
-        const target = list.find((message) => message.id === messageId);
-        url = target?.attachment?.url;
-        const next = list.filter((message) => message.id !== messageId);
-        if (next.length === list.length) return current;
-        return { ...current, [conversationId]: next };
-      });
-      if (url) URL.revokeObjectURL(url);
-      transferRef.current.delete(`${conversationId}:${messageId}`);
-    },
-    [updateMessages],
-  );
-
-  const addIncomingMessage = useCallback(
-    (
-      conversation: Conversation,
-      wire: MessageWire,
-      text?: string,
-      attachment?: ChatMessage['attachment'],
+  const notifyPeers = useCallback(
+    async (
+      userIds: Iterable<string>,
+      event = 'conversation-updated',
+      payload: Record<string, unknown> = {},
     ) => {
-      const member = conversation.members.find((item) => item.userId === wire.senderId);
-      if (!member) return;
-      const expiresAt = clampExpiry(wire.createdAt);
-      if (expiresAt <= Date.now()) return;
-
-      updateMessages((current) => {
-        const list = current[conversation.id] ?? [];
-        if (list.some((message) => message.id === wire.id)) return current;
-        const message: ChatMessage = {
-          id: wire.id,
-          conversationId: conversation.id,
-          senderId: wire.senderId,
-          senderName: member.displayName,
-          kind: wire.kind,
-          text,
-          attachment,
-          createdAt: wire.createdAt,
-          expiresAt,
-          status: 'sent',
-          mine: false,
-        };
-        return { ...current, [conversation.id]: sortMessages([...list, message]) };
-      });
-
-      if (activeIdRef.current !== conversation.id) {
-        setUnread((current) => ({
-          ...current,
-          [conversation.id]: (current[conversation.id] ?? 0) + 1,
-        }));
-      }
-    },
-    [updateMessages],
-  );
-
-  const handleMessage = useCallback(
-    (conversationId: string, payload: unknown) => {
-      void (async () => {
-        const conversation = findConversation(conversationId);
-        if (!conversation) return;
-        const parsed = messagePayloadSchema.safeParse(payload);
-        if (!parsed.success || parsed.data.kind !== 'text') return;
-        const wire = parsed.data;
-        const member = conversation.members.find((item) => item.userId === wire.senderId);
-        if (!member?.publicKey) return;
-        if (!(await verifyMessageWire(wire, member.publicKey))) return;
-
-        const key = await loadKeyForReceive(conversationId);
-        if (!key) return;
-
-        let plaintext: Awaited<ReturnType<typeof decryptMessageWire>>;
-        try {
-          plaintext = await decryptMessageWire(wire, key);
-        } catch {
-          const refreshed = await loadKeyForReceive(conversationId, true);
-          if (!refreshed) return;
-          try {
-            plaintext = await decryptMessageWire(wire, refreshed);
-          } catch {
-            if (activeIdRef.current === conversationId) {
-              toast('A message could not be decrypted and was discarded.', 'error');
-            }
-            return;
-          }
-        }
-
-        if (!('text' in plaintext)) return;
-        addIncomingMessage(conversation, wire, plaintext.text);
-      })();
-    },
-    [addIncomingMessage, findConversation, loadKeyForReceive, toast],
-  );
-
-  const handleFileMeta = useCallback(
-    (conversationId: string, payload: unknown) => {
-      void (async () => {
-        const conversation = findConversation(conversationId);
-        if (!conversation) return;
-        const parsed = messagePayloadSchema.safeParse(payload);
-        if (!parsed.success || parsed.data.kind !== 'file') return;
-        const wire = parsed.data;
-        const member = conversation.members.find((item) => item.userId === wire.senderId);
-        if (!member?.publicKey) return;
-        if (!(await verifyMessageWire(wire, member.publicKey))) return;
-
-        const key = await loadKeyForReceive(conversationId);
-        if (!key) return;
-
-        let plaintext: Awaited<ReturnType<typeof decryptMessageWire>>;
-        try {
-          plaintext = await decryptMessageWire(wire, key);
-        } catch {
-          const refreshed = await loadKeyForReceive(conversationId, true);
-          if (!refreshed) return;
-          try {
-            plaintext = await decryptMessageWire(wire, refreshed);
-          } catch {
-            return;
-          }
-        }
-        if (!('name' in plaintext)) return;
-        const meta = plaintext;
-        if (Math.ceil(meta.size / meta.chunkSize) !== meta.chunks) return;
-
-        const expiresAt = clampExpiry(wire.createdAt);
-        if (expiresAt <= Date.now()) return;
-
-        transferRef.current.set(`${conversationId}:${wire.id}`, {
-          meta,
-          wire,
-          chunks: new Array(meta.chunks),
-          received: 0,
-          createdAt: wire.createdAt,
-        });
-
-        const attachment: ChatMessage['attachment'] = {
-          id: wire.id,
-          name: meta.name,
-          mime: meta.mime,
-          size: meta.size,
-          progress: 0,
-        };
-        addIncomingMessage(conversation, wire, meta.caption, attachment);
-        markMessage(conversationId, wire.id, { status: 'receiving' });
-      })();
-    },
-    [addIncomingMessage, findConversation, loadKeyForReceive, markMessage],
-  );
-
-  const finishTransfer = useCallback(
-    async (conversationId: string, messageId: string, transfer: TransferState) => {
-      const parts = transfer.chunks.filter((part): part is Uint8Array<ArrayBuffer> =>
-        Boolean(part),
+      const targets = [...new Set(userIds)].filter((id) => id && id !== profile.id);
+      await Promise.allSettled(
+        targets.map((userId) => sendUserEvent(userId, event, payload).catch(() => undefined)),
       );
-      if (parts.length !== transfer.meta.chunks) return;
-      const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
-      if (total !== transfer.meta.size) {
-        removeMessage(conversationId, messageId);
-        toast('A file transfer was discarded because its size was invalid.', 'error');
-        return;
-      }
-
-      const blob = new Blob(parts, { type: transfer.meta.mime });
-      const candidate = new File([blob], transfer.meta.name, { type: transfer.meta.mime });
-      const inspection = await inspectFile(candidate);
-      if (!inspection.ok) {
-        removeMessage(conversationId, messageId);
-        toast('A file was discarded because its contents did not match its type.', 'error');
-        return;
-      }
-
-      const url = URL.createObjectURL(blob);
-      markMessage(conversationId, messageId, {
-        status: 'sent',
-        attachment: {
-          id: messageId,
-          name: inspection.name,
-          mime: inspection.mime,
-          size: total,
-          url,
-          progress: 100,
-        },
-      });
-      transferRef.current.delete(`${conversationId}:${messageId}`);
     },
-    [markMessage, removeMessage, toast],
+    [profile.id],
   );
 
-  const handleChunk = useCallback(
-    (conversationId: string, payload: unknown) => {
-      void (async () => {
-        const conversation = findConversation(conversationId);
-        if (!conversation) return;
-        const parsed = chunkPayloadSchema.safeParse(payload);
-        if (!parsed.success) return;
-        const wire: ChunkWire = parsed.data;
-        const transfer = transferRef.current.get(`${conversationId}:${wire.messageId}`);
-        if (!transfer) return;
-        if (transfer.chunks[wire.index]) return;
-        if (
-          wire.senderId !== transfer.wire.senderId ||
-          wire.createdAt !== transfer.wire.createdAt
-        ) {
-          return;
-        }
-        const member = conversation.members.find((item) => item.userId === wire.senderId);
-        if (!member?.publicKey) return;
-        if (!(await verifyChunkWire(wire, member.publicKey))) return;
+  // Mark peer messages as SEEN (starting the 1-minute countdown) ONLY when the
+  // user explicitly opens that individual conversation in a visible tab.
+  const activeMessages = activeId ? (messages[activeId] ?? []) : [];
+  const hasUnseenInActive = activeMessages.some(
+    (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+  );
 
-        const key = await loadKeyForReceive(conversationId);
-        if (!key) return;
-        let bytes: Uint8Array<ArrayBuffer>;
-        try {
-          bytes = await decryptChunkWire(wire, key);
-        } catch {
-          const refreshed = await loadKeyForReceive(conversationId, true);
-          if (!refreshed) return;
-          try {
-            bytes = await decryptChunkWire(wire, refreshed);
-          } catch {
-            return;
+  const triggerMarkSeen = useCallback(
+    async (conversationId: string) => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (markingSeenRef.current.has(conversationId)) return;
+      const list = messagesRef.current[conversationId] ?? [];
+      if (
+        !list.some(
+          (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+        )
+      ) {
+        return;
+      }
+
+      markingSeenRef.current.add(conversationId);
+      try {
+        const receipts = await markConversationSeen(conversationId);
+        if (receipts.length > 0) {
+          applySeenReceipts(conversationId, receipts);
+          const conv = findConversation(conversationId);
+          void broadcastConversationEvent(conversationId, 'messages-seen', {
+            conversationId,
+            receipts,
+          });
+          if (conv) {
+            void notifyPeers(
+              conv.members.map((m) => m.userId),
+              'messages-seen',
+              { conversationId, receipts },
+            );
           }
         }
-
-        if (bytes.byteLength > transfer.meta.chunkSize) {
-          removeMessage(conversationId, wire.messageId);
-          return;
-        }
-        transfer.chunks[wire.index] = bytes;
-        transfer.received += 1;
-        const assembled = transfer.chunks.reduce((sum, part) => sum + (part?.byteLength ?? 0), 0);
-        markMessage(conversationId, wire.messageId, {
-          attachment: {
-            id: wire.messageId,
-            name: transfer.meta.name,
-            mime: transfer.meta.mime,
-            size: transfer.meta.size,
-            progress: Math.min(99, Math.round((assembled / transfer.meta.size) * 100)),
-          },
-        });
-
-        if (transfer.received === transfer.meta.chunks) {
-          await finishTransfer(conversationId, wire.messageId, transfer);
-        }
-      })();
+      } catch {
+        // Retry automatically on next sync/visibility event.
+      } finally {
+        markingSeenRef.current.delete(conversationId);
+      }
     },
-    [findConversation, finishTransfer, loadKeyForReceive, markMessage, removeMessage],
+    [applySeenReceipts, broadcastConversationEvent, findConversation, notifyPeers, profile.id],
   );
-
-  const handleKeyRotated = useCallback((conversationId: string) => {
-    keysRef.current.delete(conversationId);
-  }, []);
 
   useEffect(() => {
-    refreshRef.current = refreshConversations;
-    handleMessageRef.current = handleMessage;
-    handleFileMetaRef.current = handleFileMeta;
-    handleChunkRef.current = handleChunk;
-    handleKeyRotatedRef.current = handleKeyRotated;
-  }, [refreshConversations, handleMessage, handleFileMeta, handleChunk, handleKeyRotated]);
+    if (!activeId || !hasUnseenInActive) return;
+    void triggerMarkSeen(activeId);
+  }, [activeId, hasUnseenInActive, triggerMarkSeen]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && activeIdRef.current) {
+        void triggerMarkSeen(activeIdRef.current);
+        scheduleSync();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [scheduleSync, triggerMarkSeen]);
 
   const sendText = useCallback(
-    async (rawText: string): Promise<void> => {
-      const conversation = activeIdRef.current ? findConversation(activeIdRef.current) : undefined;
-      if (!conversation) throw new Error('Choose a conversation first.');
+    async (rawText: string) => {
+      const conversationId = activeIdRef.current;
+      if (!conversationId) throw new Error('Choose a conversation first.');
+      let conversation = findConversation(conversationId);
+      if (!conversation) throw new Error('This conversation is no longer available.');
+
       const text = messageTextSchema.parse(rawText);
+
+      // If recipient replies directly inside an incoming request, accept it automatically.
+      if (isIncomingRequest(conversation, profile.id)) {
+        await acceptMessageRequest(conversation.id);
+        const refreshed = await syncAll(true);
+        conversation = refreshed.find((c) => c.id === conversationId) ?? conversation;
+      }
+
       const key = await ensureKeyForSend(conversation);
-      const id = crypto.randomUUID();
+      const id = randomId();
       const createdAt = Date.now();
-      const wire = await encryptTextWire({
-        key,
-        id,
-        conversationId: conversation.id,
-        senderId: profile.id,
-        text,
-        createdAt,
-        signPrivateKey: identity.sig.privateKey,
-      });
 
       const optimistic: ChatMessage = {
         id,
@@ -606,70 +635,89 @@ function ChatSession({
         kind: 'text',
         text,
         createdAt,
-        expiresAt: createdAt + MESSAGE_TTL_MS,
+        seenAt: null,
+        expiresAt: null,
         status: 'sending',
         mine: true,
       };
+
       updateMessages((current) => ({
         ...current,
-        [conversation.id]: sortMessages([...(current[conversation.id] ?? []), optimistic]),
+        [conversation!.id]: sortMessages([...(current[conversation!.id] ?? []), optimistic]),
       }));
 
       try {
-        await sendConversationEvent(conversation.id, 'message', wire);
-        markMessage(conversation.id, id, { status: 'sent' });
+        const packed = await packStoredTextMessage({
+          key,
+          id,
+          conversationId: conversation.id,
+          senderId: profile.id,
+          text,
+          createdAt,
+          signPrivateKey: identity.sig.privateKey,
+        });
+        const savedRow = await sendEncryptedMessage(packed);
+        const { seenAt, expiresAt } = resolveSeenTimers(savedRow.seen_at, savedRow.expires_at);
+        const confirmed: ChatMessage = {
+          ...optimistic,
+          seenAt,
+          expiresAt,
+          status: seenAt !== null ? 'seen' : 'sent',
+        };
+        decryptedRef.current.set(id, confirmed);
+        updateMessages((current) => ({
+          ...current,
+          [conversation!.id]: (current[conversation!.id] ?? []).map((item) =>
+            item.id === id ? confirmed : item,
+          ),
+        }));
+
+        void broadcastConversationEvent(conversation.id, 'message-stored', {
+          conversationId: conversation.id,
+          messageId: id,
+        });
+        void notifyPeers(conversation.members.map((m) => m.userId));
       } catch (error) {
-        removeMessage(conversation.id, id);
+        updateMessages((current) => ({
+          ...current,
+          [conversation!.id]: (current[conversation!.id] ?? []).filter((item) => item.id !== id),
+        }));
         throw error;
       }
     },
     [
+      broadcastConversationEvent,
       ensureKeyForSend,
       findConversation,
       identity.sig.privateKey,
-      markMessage,
+      notifyPeers,
       profile.display_name,
       profile.id,
-      removeMessage,
-      sendConversationEvent,
+      syncAll,
       updateMessages,
     ],
   );
 
   const sendFile = useCallback(
-    async (file: File, rawCaption = ''): Promise<void> => {
-      const conversation = activeIdRef.current ? findConversation(activeIdRef.current) : undefined;
-      if (!conversation) throw new Error('Choose a conversation first.');
-      const inspection = await inspectFile(file);
-      if (!inspection.ok) throw new Error(inspection.error);
-      const caption = rawCaption.trim();
-      if (caption.length > 4000) throw new Error('Captions are limited to 4,000 characters.');
+    async (rawFile: File, rawCaption?: string) => {
+      const conversationId = activeIdRef.current;
+      if (!conversationId) throw new Error('Choose a conversation first.');
+      const conversation = findConversation(conversationId);
+      if (!conversation) throw new Error('This conversation is no longer available.');
 
+      if (conversation.requestStatus === 'pending') {
+        throw new Error('Attachments unlock once this message request is accepted.');
+      }
+
+      const prepared = await prepareAttachmentFile(rawFile);
+      if (!prepared.ok) throw new Error(prepared.error);
+
+      const caption = rawCaption?.trim() ? messageTextSchema.parse(rawCaption) : undefined;
       const key = await ensureKeyForSend(conversation);
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const chunkSize = FILE_CHUNK_BYTES;
-      const chunks = Math.ceil(bytes.byteLength / chunkSize);
-      const id = crypto.randomUUID();
+      const id = randomId();
       const createdAt = Date.now();
-      const localUrl = URL.createObjectURL(file);
-
-      const meta: FilePlain = {
-        name: inspection.name,
-        mime: inspection.mime,
-        size: bytes.byteLength,
-        chunks,
-        chunkSize,
-        caption: caption || undefined,
-      };
-      const wire = await encryptFileMetaWire({
-        key,
-        id,
-        conversationId: conversation.id,
-        senderId: profile.id,
-        file: meta,
-        createdAt,
-        signPrivateKey: identity.sig.privateKey,
-      });
+      const bytes = new Uint8Array(await prepared.file.arrayBuffer());
+      const localUrl = URL.createObjectURL(new Blob([bytes], { type: prepared.mime }));
 
       const optimistic: ChatMessage = {
         id,
@@ -677,68 +725,87 @@ function ChatSession({
         senderId: profile.id,
         senderName: profile.display_name,
         kind: 'file',
-        text: caption || undefined,
+        text: caption,
         attachment: {
           id,
-          name: inspection.name,
-          mime: inspection.mime,
+          name: prepared.name,
+          mime: prepared.mime,
           size: bytes.byteLength,
           url: localUrl,
-          progress: 0,
+          progress: 50,
         },
         createdAt,
-        expiresAt: createdAt + MESSAGE_TTL_MS,
+        seenAt: null,
+        expiresAt: null,
         status: 'sending',
         mine: true,
       };
+
       updateMessages((current) => ({
         ...current,
         [conversation.id]: sortMessages([...(current[conversation.id] ?? []), optimistic]),
       }));
 
       try {
-        await sendConversationEvent(conversation.id, 'file-meta', wire);
-        for (let index = 0; index < chunks; index += 1) {
-          const slice = bytes.subarray(index * chunkSize, (index + 1) * chunkSize);
-          const chunk = await encryptChunkWire({
-            key,
-            messageId: id,
-            conversationId: conversation.id,
-            senderId: profile.id,
-            createdAt,
-            index,
-            bytes: slice,
-            signPrivateKey: identity.sig.privateKey,
-          });
-          await sendConversationEvent(conversation.id, 'file-chunk', chunk);
-          markMessage(conversation.id, id, {
-            attachment: {
-              id,
-              name: inspection.name,
-              mime: inspection.mime,
-              size: bytes.byteLength,
-              url: localUrl,
-              progress: Math.min(99, Math.round(((index + 1) / chunks) * 100)),
-            },
-          });
-          if (index + 1 < chunks) await delay(35);
+        const packed = await packStoredFileMessage({
+          key,
+          id,
+          conversationId: conversation.id,
+          senderId: profile.id,
+          name: prepared.name,
+          mime: prepared.mime,
+          bytes,
+          caption,
+          createdAt,
+          signPrivateKey: identity.sig.privateKey,
+        });
+        const savedRow = await sendEncryptedMessage(packed);
+        const { seenAt, expiresAt } = resolveSeenTimers(savedRow.seen_at, savedRow.expires_at);
+        const confirmed: ChatMessage = {
+          ...optimistic,
+          attachment: {
+            ...optimistic.attachment!,
+            progress: 100,
+          },
+          seenAt,
+          expiresAt,
+          status: seenAt !== null ? 'seen' : 'sent',
+        };
+        decryptedRef.current.set(id, confirmed);
+        updateMessages((current) => ({
+          ...current,
+          [conversation.id]: (current[conversation.id] ?? []).map((item) =>
+            item.id === id ? confirmed : item,
+          ),
+        }));
+
+        if (prepared.compressed) {
+          toast('Photo optimized automatically to save cloud space.', 'info');
         }
-        markMessage(conversation.id, id, { status: 'sent' });
+
+        void broadcastConversationEvent(conversation.id, 'message-stored', {
+          conversationId: conversation.id,
+          messageId: id,
+        });
+        void notifyPeers(conversation.members.map((m) => m.userId));
       } catch (error) {
-        removeMessage(conversation.id, id);
         URL.revokeObjectURL(localUrl);
+        updateMessages((current) => ({
+          ...current,
+          [conversation.id]: (current[conversation.id] ?? []).filter((item) => item.id !== id),
+        }));
         throw error;
       }
     },
     [
+      broadcastConversationEvent,
       ensureKeyForSend,
       findConversation,
       identity.sig.privateKey,
-      markMessage,
+      notifyPeers,
       profile.display_name,
       profile.id,
-      removeMessage,
-      sendConversationEvent,
+      toast,
       updateMessages,
     ],
   );
@@ -760,12 +827,53 @@ function ChatSession({
   const startDirectMessage = useCallback(
     async (person: PeopleResult): Promise<string> => {
       const id = await startDm(person.username);
-      await refreshConversations(true);
+      const next = await syncAll(true);
+      const conversation = next.find((item) => item.id === id);
+      if (conversation) {
+        const existingKey = await unwrapKeyRow(id).catch(() => null);
+        if (!existingKey) {
+          await rotateConversationKey(conversation);
+        }
+      }
       setActiveId(id);
-      void sendUserEvent(person.id, 'conversation-updated', {}).catch(() => undefined);
+      void notifyPeers([person.id]);
       return id;
     },
-    [refreshConversations, setActiveId],
+    [notifyPeers, rotateConversationKey, setActiveId, syncAll, unwrapKeyRow],
+  );
+
+  const acceptRequest = useCallback(
+    async (conversationId: string): Promise<void> => {
+      const existing = findConversation(conversationId);
+      await acceptMessageRequest(conversationId);
+      await syncAll(true);
+      setActiveId(conversationId);
+      if (existing) {
+        void notifyPeers(existing.members.map((member) => member.userId));
+      }
+      toast('Message request accepted.', 'success');
+    },
+    [findConversation, notifyPeers, setActiveId, syncAll, toast],
+  );
+
+  const declineRequest = useCallback(
+    async (conversationId: string): Promise<void> => {
+      const existing = findConversation(conversationId);
+      await declineMessageRequest(conversationId);
+      keysRef.current.delete(conversationId);
+      const list = messagesRef.current[conversationId] ?? [];
+      for (const msg of list) {
+        if (msg.attachment?.url) URL.revokeObjectURL(msg.attachment.url);
+        decryptedRef.current.delete(msg.id);
+      }
+      if (activeIdRef.current === conversationId) setActiveId(null);
+      await syncAll(true);
+      if (existing) {
+        void notifyPeers(existing.members.map((member) => member.userId));
+      }
+      toast('Message request removed.', 'info');
+    },
+    [findConversation, notifyPeers, setActiveId, syncAll, toast],
   );
 
   const createGroupChat = useCallback(
@@ -777,20 +885,22 @@ function ChatSession({
         cleanTitle,
         people.map((person) => person.username),
       );
-      await refreshConversations(true);
+      const next = await syncAll(true);
+      const conversation = next.find((item) => item.id === id);
+      if (conversation) {
+        await rotateConversationKey(conversation);
+      }
       setActiveId(id);
-      await Promise.allSettled(
-        people.map((person) => sendUserEvent(person.id, 'conversation-updated', {})),
-      );
+      await notifyPeers(people.map((person) => person.id));
       return id;
     },
-    [refreshConversations, setActiveId],
+    [notifyPeers, rotateConversationKey, setActiveId, syncAll],
   );
 
   const addGroupMember = useCallback(
     async (conversationId: string, username: string): Promise<void> => {
       const userId = await addGroupMemberRequest(conversationId, username);
-      const next = await refreshConversations(true);
+      const next = await syncAll(true);
       const conversation = next.find((item) => item.id === conversationId);
       if (conversation) {
         try {
@@ -798,101 +908,97 @@ function ChatSession({
         } catch (error) {
           toast(errorMessage(error, 'The group key could not be refreshed.'), 'error');
         }
+        await notifyPeers([userId, ...conversation.members.map((member) => member.userId)]);
+      } else {
+        void notifyPeers([userId]);
       }
-      void sendUserEvent(userId, 'conversation-updated', {}).catch(() => undefined);
     },
-    [refreshConversations, rotateConversationKey, toast],
+    [notifyPeers, rotateConversationKey, syncAll, toast],
   );
 
   const removeGroupMember = useCallback(
     async (conversationId: string, userId: string): Promise<void> => {
       const existing = findConversation(conversationId);
       await removeGroupMemberRequest(conversationId, userId);
-      if (existing) {
-        const remaining = existing.members.filter((member) => member.userId !== userId);
-        if (remaining.length > 0) {
-          try {
-            await rotateConversationKey(existing, remaining);
-          } catch (error) {
-            toast(errorMessage(error, 'The group key could not be refreshed.'), 'error');
-          }
+      const remaining = existing?.members.filter((member) => member.userId !== userId) ?? [];
+      if (existing && remaining.length > 0) {
+        try {
+          await rotateConversationKey(existing, remaining);
+        } catch (error) {
+          toast(errorMessage(error, 'The group key could not be refreshed.'), 'error');
         }
       }
-      await refreshConversations(true);
-      void sendUserEvent(userId, 'conversation-updated', {}).catch(() => undefined);
+      await syncAll(true);
+      await notifyPeers([userId, ...remaining.map((member) => member.userId)]);
     },
-    [findConversation, refreshConversations, rotateConversationKey, toast],
+    [findConversation, notifyPeers, rotateConversationKey, syncAll, toast],
   );
 
   const leaveGroupChat = useCallback(
     async (conversationId: string): Promise<void> => {
       const existing = findConversation(conversationId);
-      if (existing) {
-        const remaining = existing.members.filter((member) => member.userId !== profile.id);
-        if (remaining.length > 0) {
-          try {
-            await rotateConversationKey(existing, remaining);
-          } catch {
-            // Leaving must remain possible even if key rotation fails.
-          }
+      const remaining = existing?.members.filter((member) => member.userId !== profile.id) ?? [];
+      if (existing && remaining.length > 0) {
+        try {
+          await rotateConversationKey(existing, remaining);
+        } catch {
+          // Leaving must remain possible even if key rotation fails.
         }
-        await Promise.allSettled(
-          remaining.map((member) =>
-            sendUserEvent(member.userId, 'conversation-updated', {}).catch(() => undefined),
-          ),
-        );
       }
       await leaveGroupRequest(conversationId);
       keysRef.current.delete(conversationId);
       if (activeIdRef.current === conversationId) setActiveId(null);
-      await refreshConversations(true);
+      await syncAll(true);
+      await notifyPeers(remaining.map((member) => member.userId));
     },
-    [findConversation, profile.id, refreshConversations, rotateConversationKey, setActiveId],
+    [findConversation, notifyPeers, profile.id, rotateConversationKey, setActiveId, syncAll],
   );
 
   const renameGroupChat = useCallback(
     async (conversationId: string, title: string): Promise<void> => {
       const existing = findConversation(conversationId);
       await renameGroupRequest(conversationId, title.trim());
-      await refreshConversations(true);
+      await syncAll(true);
       if (existing) {
-        await Promise.allSettled(
-          existing.members.map((member) =>
-            sendUserEvent(member.userId, 'conversation-updated', {}).catch(() => undefined),
-          ),
-        );
+        await notifyPeers(existing.members.map((member) => member.userId));
       }
     },
-    [findConversation, refreshConversations],
+    [findConversation, notifyPeers, syncAll],
   );
 
   useEffect(() => {
-    void refreshConversations().catch(() => undefined);
-  }, [refreshConversations]);
+    void syncAll(false).catch(() => undefined);
+  }, [syncAll]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void refreshConversations(true).catch(() => undefined);
-    }, 25_000);
+      scheduleSync();
+    }, 15_000);
     const onFocus = () => {
-      void refreshConversations(true).catch(() => undefined);
+      scheduleSync();
     };
     window.addEventListener('focus', onFocus);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener('focus', onFocus);
     };
-  }, [refreshConversations]);
+  }, [scheduleSync]);
 
   useEffect(() => {
     let channel = requireSupabase().channel(`user:${profile.id}`, {
-      config: { private: true, broadcast: { self: false } },
+      config: { private: true, broadcast: { self: false, ack: true } },
     });
+    userChannelRef.current = channel;
 
     for (const event of USER_EVENTS) {
       channel = channel.on('broadcast', { event }, ({ payload }) => {
         if (event === 'conversation-updated') {
-          void refreshRef.current(true).catch(() => undefined);
+          scheduleSync();
+        } else if (event === 'messages-seen' && payload && typeof payload === 'object') {
+          const data = payload as { conversationId?: string; receipts?: SeenMessageReceipt[] };
+          if (data.conversationId && Array.isArray(data.receipts)) {
+            applySeenReceipts(data.conversationId, data.receipts);
+          }
         }
         for (const listener of userListenersRef.current) {
           listener(event, payload);
@@ -901,17 +1007,26 @@ function ChatSession({
     }
 
     channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') setConnection(navigator.onLine ? 'connected' : 'offline');
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnection('connecting');
+      if (status === 'SUBSCRIBED') {
+        setConnection(navigator.onLine ? 'connected' : 'offline');
+        scheduleSync();
+      }
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        setConnection(navigator.onLine ? 'connecting' : 'offline');
+      }
     });
 
     return () => {
+      userChannelRef.current = null;
       void requireSupabase().removeChannel(channel);
     };
-  }, [profile.id]);
+  }, [applySeenReceipts, profile.id, scheduleSync]);
 
   useEffect(() => {
-    const onOnline = () => setConnection('connecting');
+    const onOnline = () => {
+      setConnection(userChannelRef.current?.state === 'joined' ? 'connected' : 'connecting');
+      scheduleSync();
+    };
     const onOffline = () => setConnection('offline');
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
@@ -919,7 +1034,7 @@ function ChatSession({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, []);
+  }, [scheduleSync]);
 
   const conversationIds = conversations
     .map((conversation) => conversation.id)
@@ -933,17 +1048,22 @@ function ChatSession({
       let channel = requireSupabase().channel(`conversation:${conversationId}`, {
         config: { private: true, broadcast: { self: false, ack: true } },
       });
-      for (const event of TRANSFER_EVENTS) {
+      for (const event of CONVERSATION_EVENTS) {
         channel = channel.on('broadcast', { event }, ({ payload }) => {
-          if (event === 'message') handleMessageRef.current(conversationId, payload);
-          if (event === 'file-meta') handleFileMetaRef.current(conversationId, payload);
-          if (event === 'file-chunk') handleChunkRef.current(conversationId, payload);
-          if (event === 'key-rotated') handleKeyRotatedRef.current(conversationId);
+          if (event === 'message-stored') {
+            scheduleSync();
+          } else if (event === 'messages-seen' && payload && typeof payload === 'object') {
+            const data = payload as { conversationId?: string; receipts?: SeenMessageReceipt[] };
+            if (Array.isArray(data.receipts)) {
+              applySeenReceipts(conversationId, data.receipts);
+            }
+          } else if (event === 'key-rotated') {
+            keysRef.current.delete(conversationId);
+            scheduleSync();
+          }
         });
       }
-      channel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') keysRef.current.delete(conversationId);
-      });
+      channel.subscribe();
       channelsRef.current.set(conversationId, channel);
     }
 
@@ -953,58 +1073,73 @@ function ChatSession({
       keysRef.current.delete(conversationId);
       void requireSupabase().removeChannel(channel);
     }
-  }, [conversationIds]);
+  }, [applySeenReceipts, conversationIds, scheduleSync]);
 
   useEffect(() => {
-    // These maps are created once and only mutated, so capturing them at mount
-    // is safe and lets the cleanup read the latest contents.
     const channels = channelsRef.current;
-    const transfers = transferRef.current;
     const keys = keysRef.current;
-    const messageState = messagesRef.current;
+    const decrypted = decryptedRef.current;
     return () => {
       for (const channel of channels.values()) {
         void requireSupabase().removeChannel(channel);
       }
       channels.clear();
       void closeOutboundChannels();
-      for (const list of Object.values(messageState)) {
-        for (const message of list) {
-          if (message.attachment?.url) URL.revokeObjectURL(message.attachment.url);
-        }
+      for (const message of decrypted.values()) {
+        if (message.attachment?.url) URL.revokeObjectURL(message.attachment.url);
       }
-      transfers.clear();
+      decrypted.clear();
       keys.clear();
     };
   }, []);
 
+  // Automatic 1-second sweep for messages whose 1-minute post-seen timer reached 0:00.
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
       const revoked: string[] = [];
+      let expiredAny = false;
+
       updateMessages((current) => {
         let changed = false;
         const next: Record<string, ChatMessage[]> = {};
         for (const [conversationId, list] of Object.entries(current)) {
           const kept = list.filter((message) => {
-            if (message.expiresAt > now) return true;
+            if (message.expiresAt === null || message.expiresAt > now) return true;
             changed = true;
+            expiredAny = true;
             if (message.attachment?.url) revoked.push(message.attachment.url);
-            transferRef.current.delete(`${conversationId}:${message.id}`);
+            decryptedRef.current.delete(message.id);
             return false;
           });
           next[conversationId] = kept;
         }
         return changed ? next : current;
       });
+
       for (const url of revoked) URL.revokeObjectURL(url);
-      for (const [key, transfer] of transferRef.current) {
-        if (transfer.createdAt + MESSAGE_TTL_MS <= now) {
-          transferRef.current.delete(key);
+
+      if (expiredAny) {
+        const elapsed = now - lastServerPurgeRef.current;
+        if (elapsed >= 1_500) {
+          lastServerPurgeRef.current = now;
+          void purgeExpiredMessages();
+        } else if (purgeTimeoutRef.current === null) {
+          purgeTimeoutRef.current = window.setTimeout(() => {
+            purgeTimeoutRef.current = null;
+            lastServerPurgeRef.current = Date.now();
+            void purgeExpiredMessages();
+          }, 1_500 - elapsed);
         }
       }
     }, 1_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (purgeTimeoutRef.current !== null) {
+        window.clearTimeout(purgeTimeoutRef.current);
+        purgeTimeoutRef.current = null;
+      }
+    };
   }, [updateMessages]);
 
   const activeConversation = useMemo(
@@ -1012,35 +1147,56 @@ function ChatSession({
     [conversations, activeId],
   );
 
-  useEffect(() => {
-    const conversation = activeConversation;
-    if (!conversation || keysRef.current.has(conversation.id)) return;
-    let active = true;
-    void (async () => {
-      const row = await fetchWrappedKey(conversation.id).catch(() => null);
-      if (!active || !row) return;
-      const loaded = await unwrapKeyRow(conversation.id).catch(() => null);
-      if (!active || loaded) return;
-      await rotateConversationKey(conversation).catch(() => undefined);
-    })();
-    return () => {
-      active = false;
-    };
-  }, [activeConversation, rotateConversationKey, unwrapKeyRow]);
+  const { activeChats, incomingRequests } = useMemo(() => {
+    const chats: Conversation[] = [];
+    const requests: Conversation[] = [];
+    for (const conv of conversations) {
+      if (isIncomingRequest(conv, profile.id)) {
+        requests.push(conv);
+      } else {
+        chats.push(conv);
+      }
+    }
+    return { activeChats: chats, incomingRequests: requests };
+  }, [conversations, profile.id]);
+
+  const unread = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const [convId, list] of Object.entries(messages)) {
+      const unseenCount = list.filter(
+        (msg) => !msg.mine && msg.seenAt === null && !(msg.seenBy ?? []).includes(profile.id),
+      ).length;
+      if (unseenCount > 0) counts[convId] = unseenCount;
+    }
+    return counts;
+  }, [messages, profile.id]);
+
+  const totalUnreadChats = useMemo(
+    () => activeChats.reduce((sum, conv) => sum + (unread[conv.id] ?? 0), 0),
+    [activeChats, unread],
+  );
+
+  const incomingRequestCount = incomingRequests.length;
 
   const value = useMemo<ChatContextValue>(
     () => ({
       conversations,
+      activeChats,
+      incomingRequests,
       conversationsLoading,
       conversationsError,
       activeId,
       activeConversation,
       messages,
       unread,
+      totalUnreadChats,
+      incomingRequestCount,
       connection,
       setActiveId,
       refreshConversations,
       startDirectMessage,
+      acceptRequest,
+      declineRequest,
       createGroupChat,
       sendText,
       sendFile,
@@ -1053,16 +1209,22 @@ function ChatSession({
     }),
     [
       conversations,
+      activeChats,
+      incomingRequests,
       conversationsLoading,
       conversationsError,
       activeId,
       activeConversation,
       messages,
       unread,
+      totalUnreadChats,
+      incomingRequestCount,
       connection,
       setActiveId,
       refreshConversations,
       startDirectMessage,
+      acceptRequest,
+      declineRequest,
       createGroupChat,
       sendText,
       sendFile,

@@ -30,12 +30,17 @@ export function conversationHandle(conversation: Conversation, myId: string): st
     return `${count} ${count === 1 ? 'member' : 'members'}`;
   }
   const peer = dmPeer(conversation, myId);
-  return peer ? `@${peer.username}` : 'Private conversation';
+  return peer ? `@${peer.username}` : 'Private chat';
 }
 
 export function conversationSeed(conversation: Conversation, myId: string): string {
   if (conversation.kind === 'group') return conversation.id;
   return dmPeer(conversation, myId)?.userId ?? conversation.id;
+}
+
+export function conversationDpUrl(conversation: Conversation, myId: string): string | null {
+  if (conversation.kind === 'group') return null;
+  return dmPeer(conversation, myId)?.avatarUrl ?? null;
 }
 
 export function formatClock(timestamp: number): string {

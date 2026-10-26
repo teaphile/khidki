@@ -1,171 +1,165 @@
-import { useEffect, useRef, useState } from 'react';
-import { Loader2, MessageCircle, Search, SearchX, ShieldCheck, UserPlus } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AtSign, Loader2, MessageSquarePlus, Search } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useToast } from '../../context/ToastContext';
 import { searchPeople } from '../../lib/data';
+import { dmPeer } from '../../lib/format';
+import { sanitizeUsernameInput } from '../../lib/validation';
 import type { PeopleResult } from '../../types';
 import { Avatar } from '../ui/Avatar';
 
-export function PeoplePanel({ onConversationStarted }: { onConversationStarted: () => void }) {
+export function PeoplePanel({ onConversationReady }: { onConversationReady: () => void }) {
   const { profile } = useAuth();
-  const { startDirectMessage } = useChat();
+  const { conversations, startDirectMessage, setActiveId } = useChat();
   const { toast } = useToast();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PeopleResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState<string | null>(null);
-  const [searched, setSearched] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
+  const myId = profile?.id ?? '';
+
+  const existingByPeerId = useMemo(() => {
+    const map = new Map<string, { id: string; pending: boolean }>();
+    for (const conv of conversations) {
+      if (conv.kind !== 'dm') continue;
+      const peer = dmPeer(conv, myId);
+      if (peer) {
+        map.set(peer.userId, {
+          id: conv.id,
+          pending: conv.requestStatus === 'pending',
+        });
+      }
+    }
+    return map;
+  }, [conversations, myId]);
 
   useEffect(() => {
-    const trimmed = query.trim();
+    const trimmed = query.trim().replace(/^@/, '').toLowerCase();
     if (trimmed.length < 2) {
       setResults([]);
+      setLoading(false);
       setError(null);
-      setSearching(false);
-      setSearched('');
       return;
     }
 
     const id = ++requestId.current;
-    setSearching(true);
+    setLoading(true);
     setError(null);
+
     const timer = window.setTimeout(() => {
       void searchPeople(trimmed)
         .then((people) => {
           if (requestId.current !== id) return;
           setResults(people);
-          setSearched(trimmed);
         })
         .catch((caught: unknown) => {
           if (requestId.current !== id) return;
-          setError(caught instanceof Error ? caught.message : 'Unable to search for people.');
-          setResults([]);
+          setError(caught instanceof Error ? caught.message : 'Search failed.');
         })
         .finally(() => {
-          if (requestId.current === id) setSearching(false);
+          if (requestId.current === id) setLoading(false);
         });
-    }, 280);
+    }, 220);
 
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  const start = async (person: PeopleResult) => {
+  const openDm = async (person: PeopleResult) => {
+    const existing = existingByPeerId.get(person.id);
+    if (existing) {
+      setActiveId(existing.id);
+      onConversationReady();
+      return;
+    }
+
     setStarting(person.id);
     try {
       await startDirectMessage(person);
-      onConversationStarted();
+      onConversationReady();
     } catch (caught) {
-      toast(
-        caught instanceof Error ? caught.message : 'Unable to start the conversation.',
-        'error',
-      );
+      toast(caught instanceof Error ? caught.message : 'Unable to start conversation.', 'error');
     } finally {
       setStarting(null);
     }
   };
 
-  const trimmed = query.trim();
-
   return (
-    <div className="list-view people-view">
-      <header className="list-header">
+    <section className="panel" aria-label="Find people">
+      <header className="panel__header">
         <div>
-          <span className="eyebrow">Discovery</span>
-          <h1>People</h1>
+          <span className="eyebrow">Directory</span>
+          <h1>Find people</h1>
         </div>
-        <span className="header-emblem" aria-hidden="true">
-          <UserPlus size={19} />
-        </span>
       </header>
 
-      <p className="panel-intro">
-        Find someone by their username. You need at least two characters, and only verified accounts
-        appear.
-      </p>
-
-      <div className="list-search">
-        <Search size={17} aria-hidden="true" />
+      <label className="search-field">
+        <Search size={16} aria-hidden="true" />
         <input
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search by username"
-          aria-label="Search people by username"
-          autoComplete="off"
+          onChange={(event) =>
+            setQuery(sanitizeUsernameInput(event.target.value.replace(/^@/, '')))
+          }
+          placeholder="Search @username (a-z, 0-9)"
+          aria-label="Search by username"
+          maxLength={10}
+          autoCapitalize="none"
           spellCheck={false}
-          maxLength={40}
         />
-        {searching ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
-      </div>
+        {loading ? <Loader2 className="spin" size={16} aria-hidden="true" /> : null}
+      </label>
 
-      <div className="people-scroll">
-        {trimmed.length < 2 ? (
-          <div className="empty-panel">
-            <span className="empty-panel__icon">
-              <Search size={21} aria-hidden="true" />
-            </span>
-            <strong>Search by username</strong>
-            <p>Usernames are unique and cannot be changed. Ask the person for theirs.</p>
+      <div className="panel__body">
+        {query.trim().length < 2 ? (
+          <div className="empty-card">
+            <AtSign size={24} aria-hidden="true" />
+            <h2>Search by username</h2>
+            <p>
+              Enter at least two letters or numbers of someone&apos;s username to send a message
+              request.
+            </p>
           </div>
-        ) : null}
-
-        {error ? (
-          <div className="empty-panel">
-            <span className="empty-panel__icon">
-              <SearchX size={21} aria-hidden="true" />
-            </span>
-            <strong>Search is unavailable</strong>
+        ) : error ? (
+          <div className="empty-card">
             <p>{error}</p>
           </div>
-        ) : null}
-
-        {!error && trimmed.length >= 2 && !searching && searched && !results.length ? (
-          <div className="empty-panel">
-            <span className="empty-panel__icon">
-              <SearchX size={21} aria-hidden="true" />
-            </span>
-            <strong>No one found</strong>
-            <p>Check the spelling. Search matches usernames from the beginning.</p>
+        ) : !loading && !results.length ? (
+          <div className="empty-card">
+            <h2>No verified user found</h2>
+            <p>Check the exact 3 to 10 character username and make sure they verified email.</p>
           </div>
-        ) : null}
-
-        {results.length ? (
-          <div className="people-results" role="list" aria-label="People">
-            {results.map((person) => (
-              <div className="person-card" key={person.id} role="listitem">
-                <Avatar name={person.display_name} seed={person.id} />
-                <div className="person-card__details">
-                  <strong>{person.display_name}</strong>
-                  <span>@{person.username}</span>
-                </div>
-                <button
-                  type="button"
-                  className="button button--secondary button--compact"
-                  onClick={() => void start(person)}
-                  disabled={starting !== null || person.id === profile?.id}
-                >
-                  {starting === person.id ? (
-                    <Loader2 className="spin" size={16} aria-hidden="true" />
-                  ) : (
-                    <MessageCircle size={16} aria-hidden="true" />
-                  )}
-                  Message
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="privacy-note">
-          <ShieldCheck size={17} aria-hidden="true" />
-          <p>
-            Search only reveals verified profiles. Your email address is never shown to other
-            people.
-          </p>
-        </div>
+        ) : (
+          <ul className="people-list">
+            {results.map((person) => {
+              const existing = existingByPeerId.get(person.id);
+              return (
+                <li key={person.id} className="person-row">
+                  <Avatar name={person.display_name} seed={person.id} dpUrl={person.avatar_url} />
+                  <div className="person-row__meta">
+                    <strong className="truncate">{person.display_name}</strong>
+                    <span className="truncate">@{person.username}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button--secondary button--compact"
+                    disabled={starting === person.id}
+                    onClick={() => void openDm(person)}
+                  >
+                    {starting === person.id ? (
+                      <Loader2 className="spin" size={15} aria-hidden="true" />
+                    ) : (
+                      <MessageSquarePlus size={15} aria-hidden="true" />
+                    )}
+                    {existing ? (existing.pending ? 'Pending' : 'Open') : 'Message'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
-    </div>
+    </section>
   );
 }

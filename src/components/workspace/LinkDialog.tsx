@@ -13,8 +13,8 @@ export function LinkDialog({
     <Modal
       open={Boolean(link)}
       onClose={onClose}
-      title="You are leaving Sotto"
-      description="This link was shared by another person, not by Sotto."
+      title="You are leaving Khidki"
+      description="This link was shared by another person, not by Khidki."
       size="small"
       footer={
         <>
@@ -63,12 +63,14 @@ export function LinkDialog({
             </div>
           ) : null}
           <p className="muted-copy">
-            Check the address carefully. Sotto will never ask you to enter your password on another
+            Check the address carefully. Khidki will never ask you to enter your password on another
             website.
           </p>
           {!link.canOpen ? (
             <p className="form-error">
-              This link cannot be opened safely because it is not encrypted with HTTPS.
+              {link.protocol === 'http:'
+                ? 'This link cannot be opened safely because it is not encrypted with HTTPS.'
+                : 'This link was blocked because it contains unsafe destination parameters.'}
             </p>
           ) : null}
         </div>

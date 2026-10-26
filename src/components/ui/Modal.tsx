@@ -28,6 +28,7 @@ export function Modal({
   const titleId = useId();
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -37,9 +38,12 @@ export function Modal({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = 0;
+    }
+
     const panel = panelRef.current;
-    const firstFocusable = panel?.querySelector<HTMLElement>(FOCUSABLE);
-    (firstFocusable ?? panel)?.focus();
+    panel?.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -53,7 +57,7 @@ export function Modal({
       );
       if (!focusable.length) {
         event.preventDefault();
-        panel.focus();
+        panel.focus({ preventScroll: true });
         return;
       }
       const first = focusable[0];
@@ -94,9 +98,13 @@ export function Modal({
         tabIndex={-1}
       >
         <header className="modal__header">
-          <div>
+          <div className="modal__titles">
             <h2 id={titleId}>{title}</h2>
-            {description ? <p id={descriptionId}>{description}</p> : null}
+            {description ? (
+              <p id={descriptionId} className="truncate">
+                {description}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -107,7 +115,9 @@ export function Modal({
             <X size={18} aria-hidden="true" />
           </button>
         </header>
-        <div className="modal__body">{children}</div>
+        <div ref={bodyRef} className="modal__body">
+          {children}
+        </div>
         {footer ? <footer className="modal__footer">{footer}</footer> : null}
       </div>
     </div>,

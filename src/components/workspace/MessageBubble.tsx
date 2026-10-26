@@ -2,13 +2,28 @@ import { useEffect, useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { assessLink, splitTextWithLinks } from '../../lib/links';
 import type { LinkAssessment } from '../../lib/links';
-import { formatBytes, isImageMime } from '../../lib/files';
+import { formatBytes, isImageMime, isVideoMime } from '../../lib/files';
 import { formatClock, formatRemaining } from '../../lib/format';
-import { Check, Clock3, Download, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
+import {
+  Check,
+  CheckCheck,
+  Clock3,
+  Download,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  Video as VideoIcon,
+} from 'lucide-react';
 
-function useRemaining(expiresAt: number): number {
-  const [remaining, setRemaining] = useState(() => Math.max(0, expiresAt - Date.now()));
+function useRemaining(expiresAt: number | null): number | null {
+  const [remaining, setRemaining] = useState<number | null>(() =>
+    expiresAt !== null ? Math.max(0, expiresAt - Date.now()) : null,
+  );
   useEffect(() => {
+    if (expiresAt === null) {
+      setRemaining(null);
+      return;
+    }
     const update = () => setRemaining(Math.max(0, expiresAt - Date.now()));
     update();
     const timer = window.setInterval(update, 1_000);
@@ -61,6 +76,7 @@ export function MessageBubble({
   const attachment = message.attachment;
   const receiving = message.status === 'receiving';
   const image = attachment ? isImageMime(attachment.mime) && Boolean(attachment.url) : false;
+  const video = attachment ? isVideoMime(attachment.mime) && Boolean(attachment.url) : false;
 
   return (
     <article className={`message${message.mine ? ' message--mine' : ''}`}>
@@ -80,74 +96,81 @@ export function MessageBubble({
                 download={attachment.name}
                 aria-label={`Download ${attachment.name}`}
               >
-                <img src={attachment.url} alt={attachment.name} loading="lazy" />
+                <img
+                  src={attachment.url}
+                  alt={attachment.name}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                />
               </a>
-            ) : (
-              <div className="attachment__file">
-                <span className="attachment__icon">
-                  {isImageMime(attachment.mime) ? (
-                    <ImageIcon size={19} aria-hidden="true" />
-                  ) : (
-                    <FileText size={19} aria-hidden="true" />
-                  )}
+            ) : video && attachment.url ? (
+              <div className="attachment__video">
+                <video src={attachment.url} controls playsInline preload="metadata" />
+              </div>
+            ) : null}
+            <div className="attachment__bar">
+              <span className="attachment__icon">
+                {receiving ? (
+                  <Loader2 className="spin" size={17} aria-hidden="true" />
+                ) : isImageMime(attachment.mime) ? (
+                  <ImageIcon size={17} aria-hidden="true" />
+                ) : isVideoMime(attachment.mime) ? (
+                  <VideoIcon size={17} aria-hidden="true" />
+                ) : (
+                  <FileText size={17} aria-hidden="true" />
+                )}
+              </span>
+              <span className="attachment__meta">
+                <strong className="truncate">{attachment.name}</strong>
+                <span>
+                  {formatBytes(attachment.size)}
+                  {receiving && typeof attachment.progress === 'number'
+                    ? ` · ${attachment.progress}%`
+                    : ''}
                 </span>
-                <div className="attachment__details">
-                  <strong title={attachment.name}>{attachment.name}</strong>
-                  <span>
-                    {formatBytes(attachment.size)}
-                    {receiving ? ' · receiving' : ''}
-                  </span>
-                </div>
-                {attachment.url ? (
-                  <a
-                    className="icon-button attachment__download"
-                    href={attachment.url}
-                    download={attachment.name}
-                    aria-label={`Download ${attachment.name}`}
-                    title="Download before it expires"
-                  >
-                    <Download size={18} aria-hidden="true" />
-                  </a>
-                ) : null}
-              </div>
-            )}
-
-            {receiving ? (
-              <div className="attachment__progress" aria-label="File transfer progress">
-                <span style={{ width: `${attachment.progress ?? 0}%` }} />
-              </div>
-            ) : null}
-
-            {image && attachment.url ? (
-              <a
-                className="attachment__download-row"
-                href={attachment.url}
-                download={attachment.name}
-              >
-                <Download size={15} aria-hidden="true" />
-                <span>{formatBytes(attachment.size)}</span>
-                <span>Download</span>
-              </a>
-            ) : null}
+              </span>
+              {attachment.url ? (
+                <a
+                  className="icon-button icon-button--small"
+                  href={attachment.url}
+                  download={attachment.name}
+                  aria-label={`Save ${attachment.name}`}
+                >
+                  <Download size={16} aria-hidden="true" />
+                </a>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
-        <div className="bubble__meta">
-          <span>{formatClock(message.createdAt)}</span>
-          <span className="bubble__timer" data-low={remaining <= 20_000}>
-            <Clock3 size={11} aria-hidden="true" />
-            {formatRemaining(remaining)}
-          </span>
+        <footer className="bubble__meta">
+          <time>{formatClock(message.createdAt)}</time>
+          {remaining !== null ? (
+            <span
+              className={`timer${remaining <= 20_000 ? ' timer--urgent' : ''}`}
+              title="Seen · auto-cleans when timer reaches 0:00"
+            >
+              <Clock3 size={11} aria-hidden="true" />
+              Seen · {formatRemaining(remaining)}
+            </span>
+          ) : (
+            <span className="timer timer--waiting" title="Stays encrypted until seen">
+              Waiting to be seen
+            </span>
+          )}
           {message.mine ? (
-            <span className="bubble__status" aria-label={message.status}>
+            <span className="delivery" aria-label={message.status}>
               {message.status === 'sending' ? (
                 <Loader2 className="spin" size={12} aria-hidden="true" />
+              ) : message.seenAt !== null ? (
+                <CheckCheck size={13} aria-hidden="true" />
               ) : (
-                <Check size={13} aria-hidden="true" />
+                <Check size={12} aria-hidden="true" />
               )}
             </span>
           ) : null}
-        </div>
+        </footer>
       </div>
     </article>
   );

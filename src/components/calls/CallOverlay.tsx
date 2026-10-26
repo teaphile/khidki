@@ -1,238 +1,228 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Check,
-  Loader2,
   Mic,
   MicOff,
   Phone,
   PhoneOff,
   ShieldCheck,
+  SwitchCamera,
   Video,
   VideoOff,
 } from 'lucide-react';
 import { useCall } from '../../context/CallContext';
-import { formatCallDuration, initials } from '../../lib/format';
-
-function AttachStream({
-  stream,
-  muted = false,
-  className,
-  video = true,
-}: {
-  stream: MediaStream | null;
-  muted?: boolean;
-  className?: string;
-  video?: boolean;
-}) {
-  const ref = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    element.srcObject = stream;
-    return () => {
-      element.srcObject = null;
-    };
-  }, [stream]);
-
-  return (
-    <video
-      ref={ref}
-      className={className}
-      autoPlay
-      playsInline
-      muted={muted}
-      aria-label={video ? 'Call video' : 'Call audio'}
-    />
-  );
-}
+import { formatCallDuration } from '../../lib/format';
+import { Avatar } from '../ui/Avatar';
 
 export function CallOverlay() {
   const {
     call,
     localStream,
     remoteStream,
-    muted,
-    cameraOn,
+    micMuted,
+    cameraOff,
+    canFlipCamera,
     acceptCall,
     declineCall,
     endCall,
-    toggleMute,
+    toggleMic,
     toggleCamera,
+    switchCamera,
   } = useCall();
-  const [elapsed, setElapsed] = useState('0:00');
+
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (call.status !== 'active' || !call.startedAt) {
-      setElapsed('0:00');
-      return;
+    const element = localVideoRef.current;
+    if (!element) return;
+    element.srcObject = localStream;
+    if (localStream) {
+      void element.play().catch(() => undefined);
     }
-    const update = () => setElapsed(formatCallDuration(call.startedAt ?? Date.now(), Date.now()));
-    update();
-    const timer = window.setInterval(update, 1_000);
-    return () => window.clearInterval(timer);
-  }, [call.startedAt, call.status]);
+  }, [localStream, call.video, cameraOff]);
 
   useEffect(() => {
-    if (call.status === 'idle') return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previous;
-    };
+    const videoEl = remoteVideoRef.current;
+    if (videoEl) {
+      videoEl.srcObject = remoteStream;
+      if (remoteStream) {
+        void videoEl.play().catch(() => undefined);
+      }
+    }
+    const audioEl = remoteAudioRef.current;
+    if (audioEl) {
+      audioEl.srcObject = remoteStream;
+      if (remoteStream) {
+        void audioEl.play().catch(() => undefined);
+      }
+    }
+  }, [remoteStream, call.status]);
+
+  useEffect(() => {
+    if (call.status !== 'active') return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
   }, [call.status]);
 
   if (call.status === 'idle') return null;
 
-  const incoming = call.status === 'incoming';
-  const active = call.status === 'active';
-  const title =
-    call.status === 'outgoing'
-      ? 'Calling…'
-      : call.status === 'incoming'
-        ? `Incoming ${call.video ? 'video' : 'audio'} call`
-        : active
-          ? elapsed
-          : 'Connecting…';
+  const hasRemoteVideo =
+    call.video &&
+    !!remoteStream &&
+    remoteStream.getVideoTracks().some((track) => track.readyState === 'live' && !track.muted);
+
+  const hasLocalVideo =
+    call.video &&
+    !cameraOff &&
+    !!localStream &&
+    localStream.getVideoTracks().some((track) => track.readyState === 'live');
+
+  const subtitle =
+    call.status === 'incoming'
+      ? call.video
+        ? 'Incoming video call'
+        : 'Incoming voice call'
+      : call.status === 'outgoing'
+        ? 'Ringing…'
+        : call.status === 'connecting'
+          ? 'Connecting…'
+          : call.startedAt
+            ? formatCallDuration(call.startedAt, now)
+            : 'Connected';
 
   return (
     <div
-      className="call-overlay"
-      data-status={call.status}
-      data-video={call.video ? 'true' : 'false'}
+      className={`call-overlay ${hasRemoteVideo ? 'call-overlay--video' : ''}`}
       role="dialog"
       aria-modal="true"
       aria-label={`Call with ${call.peerName}`}
     >
-      <div className="call-backdrop" aria-hidden="true" />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
 
-      {active && call.video ? (
-        <div className="call-stage">
-          <AttachStream stream={remoteStream} className="call-remote-video" />
-          {!remoteStream ? (
-            <div className="call-waiting">
-              <Loader2 className="spin" size={28} aria-hidden="true" />
-              <span>Connecting video…</span>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="call-audio-stage">
-          <div className={`call-avatar${active ? ' is-live' : ''}`}>
-            <span>{initials(call.peerName)}</span>
+      <div className="call-card">
+        {call.video ? (
+          <video
+            ref={remoteVideoRef}
+            className={`call-remote-video ${hasRemoteVideo ? 'is-live' : 'is-waiting'}`}
+            autoPlay
+            playsInline
+          />
+        ) : null}
+
+        {!hasRemoteVideo ? (
+          <div className="call-identity">
+            <Avatar
+              name={call.peerName || 'Contact'}
+              seed={call.peerId ?? call.peerName}
+              dpUrl={call.peerAvatarUrl}
+              size="xl"
+            />
+            <h2>{call.peerName}</h2>
+            <p>{subtitle}</p>
+            <span className="call-encrypted-pill">
+              <ShieldCheck size={13} aria-hidden="true" /> End-to-end encrypted
+            </span>
           </div>
-          <h2>{call.peerName}</h2>
-          <p className="call-status" aria-live="polite">
-            {title}
-          </p>
-          <span className="call-secure">
-            <ShieldCheck size={14} aria-hidden="true" /> Encrypted signaling · peer-to-peer media
-          </span>
-        </div>
-      )}
-
-      {active && call.video ? (
-        <header className="call-topbar">
-          <div>
+        ) : (
+          <div className="call-floating-meta">
             <strong>{call.peerName}</strong>
-            <span>{elapsed}</span>
+            <span>{subtitle}</span>
           </div>
-          <span className="call-secure">
-            <ShieldCheck size={14} aria-hidden="true" /> End-to-end encrypted
-          </span>
-        </header>
-      ) : null}
+        )}
 
-      {localStream && call.video ? (
-        <div className="call-local-preview" data-off={!cameraOn}>
-          <AttachStream stream={localStream} muted className="call-local-video" />
-          {!cameraOn ? (
-            <span>
-              <VideoOff size={15} aria-hidden="true" /> Camera off
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+        <video
+          ref={localVideoRef}
+          className={`call-local-video ${hasLocalVideo ? '' : 'is-hidden'}`}
+          autoPlay
+          muted
+          playsInline
+        />
 
-      {active && !call.video && remoteStream ? (
-        <AttachStream stream={remoteStream} video={false} className="visually-hidden" />
-      ) : null}
-
-      {incoming ? (
-        <div className="incoming-actions">
-          <button
-            type="button"
-            className="call-action call-action--accept"
-            onClick={() => void acceptCall()}
-            aria-label="Accept call"
-          >
-            <Phone size={24} aria-hidden="true" />
-            <span>Accept</span>
-          </button>
-          <button
-            type="button"
-            className="call-action call-action--end"
-            onClick={() => void declineCall()}
-            aria-label="Decline call"
-          >
-            <PhoneOff size={24} aria-hidden="true" />
-            <span>Decline</span>
-          </button>
-        </div>
-      ) : (
         <div className="call-controls">
-          <button
-            type="button"
-            className={`call-control${muted ? ' is-off' : ''}`}
-            onClick={toggleMute}
-            aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
-            title={muted ? 'Unmute' : 'Mute'}
-          >
-            {muted ? <MicOff size={21} aria-hidden="true" /> : <Mic size={21} aria-hidden="true" />}
-            <span>{muted ? 'Unmute' : 'Mute'}</span>
-          </button>
-          {call.video ? (
-            <button
-              type="button"
-              className={`call-control${!cameraOn ? ' is-off' : ''}`}
-              onClick={toggleCamera}
-              aria-label={cameraOn ? 'Turn camera off' : 'Turn camera on'}
-              title={cameraOn ? 'Camera off' : 'Camera on'}
-            >
-              {cameraOn ? (
-                <Video size={21} aria-hidden="true" />
-              ) : (
-                <VideoOff size={21} aria-hidden="true" />
-              )}
-              <span>{cameraOn ? 'Camera' : 'Camera off'}</span>
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="call-control call-control--end"
-            onClick={() => void endCall()}
-            aria-label="End call"
-            title="End call"
-          >
-            <PhoneOff size={22} aria-hidden="true" />
-            <span>End</span>
-          </button>
-        </div>
-      )}
+          {call.status === 'incoming' ? (
+            <>
+              <button
+                type="button"
+                className="call-btn call-btn--decline"
+                onClick={() => void declineCall()}
+                aria-label="Decline call"
+              >
+                <PhoneOff size={22} aria-hidden="true" />
+                <span>Decline</span>
+              </button>
+              <button
+                type="button"
+                className="call-btn call-btn--accept"
+                onClick={() => void acceptCall()}
+                aria-label="Accept call"
+              >
+                {call.video ? (
+                  <Video size={22} aria-hidden="true" />
+                ) : (
+                  <Phone size={22} aria-hidden="true" />
+                )}
+                <span>Accept</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={`call-btn ${micMuted ? 'is-toggled' : ''}`}
+                onClick={toggleMic}
+                aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+              >
+                {micMuted ? (
+                  <MicOff size={20} aria-hidden="true" />
+                ) : (
+                  <Mic size={20} aria-hidden="true" />
+                )}
+                <span>{micMuted ? 'Unmute' : 'Mute'}</span>
+              </button>
 
-      {call.status === 'outgoing' || call.status === 'connecting' ? (
-        <div className="call-dialing">
-          <span>
-            <Loader2 className="spin" size={14} aria-hidden="true" />
-            {call.status === 'outgoing' ? 'Ringing securely' : 'Establishing connection'}
-          </span>
-          {call.status === 'outgoing' ? (
-            <span className="call-dialing__hint">
-              <Check size={14} aria-hidden="true" /> End-to-end encrypted
-            </span>
-          ) : null}
+              {call.video ? (
+                <button
+                  type="button"
+                  className={`call-btn ${cameraOff ? 'is-toggled' : ''}`}
+                  onClick={toggleCamera}
+                  aria-label={cameraOff ? 'Turn camera on' : 'Turn camera off'}
+                >
+                  {cameraOff ? (
+                    <VideoOff size={20} aria-hidden="true" />
+                  ) : (
+                    <Video size={20} aria-hidden="true" />
+                  )}
+                  <span>{cameraOff ? 'Cam on' : 'Cam off'}</span>
+                </button>
+              ) : null}
+
+              {call.video && canFlipCamera && !cameraOff ? (
+                <button
+                  type="button"
+                  className="call-btn"
+                  onClick={() => void switchCamera()}
+                  aria-label="Switch front or rear camera"
+                >
+                  <SwitchCamera size={20} aria-hidden="true" />
+                  <span>Flip</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                className="call-btn call-btn--decline"
+                onClick={() => void endCall()}
+                aria-label="End call"
+              >
+                <PhoneOff size={20} aria-hidden="true" />
+                <span>End</span>
+              </button>
+            </>
+          )}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

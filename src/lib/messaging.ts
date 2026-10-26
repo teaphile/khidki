@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PublicKeyBundle } from '../types';
+import type { PrivateKeyMaterial, PublicKeyBundle, StoredMessageRow } from '../types';
 import {
   decryptBytes,
   decryptJson,
@@ -8,12 +8,12 @@ import {
   signPayload,
   verifyPayload,
 } from './crypto';
-import { isAllowedMime, MAX_FILE_BYTES } from './files';
+import { hasMagicBytes, isAllowedMime, MAX_FILE_BYTES } from './files';
 
-export const MESSAGE_TTL_MS = 120_000;
+export const MESSAGE_TTL_MS = 60_000;
 export const FILE_CHUNK_BYTES = 128 * 1024;
 
-const MAX_CIPHERTEXT = 420_000;
+const MAX_CIPHERTEXT = 400_000;
 const MAX_TEXT_CIPHERTEXT = 20_000;
 
 const uuid = z.string().uuid();
@@ -59,7 +59,26 @@ const filePlainSchema = z.object({
   caption: z.string().max(4000).optional(),
 });
 
+const storedFilePlainSchema = z.object({
+  name: z.string().min(1).max(96),
+  mime: z.string().max(80).refine(isAllowedMime, 'Unsupported file type.'),
+  size: z.number().int().positive().max(MAX_FILE_BYTES),
+  data: base64(360_000),
+  caption: z.string().max(4000).optional(),
+});
+
 export type FilePlain = z.infer<typeof filePlainSchema>;
+
+export type DecryptedStoredMessage =
+  | { kind: 'text'; text: string }
+  | {
+      kind: 'file';
+      name: string;
+      mime: string;
+      size: number;
+      bytes: Uint8Array<ArrayBuffer>;
+      caption?: string;
+    };
 
 export function canonicalMessage(wire: Omit<MessageWire, 'sig' | 'v'> & { v?: 1 }): string {
   return JSON.stringify([
@@ -81,6 +100,37 @@ export function messageAad(
   createdAt: number,
 ): string {
   return `message:${conversationId}:${messageId}:${senderId}:${createdAt}`;
+}
+
+export function storedMessageAad(
+  conversationId: string,
+  messageId: string,
+  senderId: string,
+  kind: 'text' | 'file',
+  createdAt: number,
+): string {
+  return `stored:${conversationId}:${messageId}:${senderId}:${kind}:${createdAt}`;
+}
+
+export function canonicalStoredMessage(input: {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  kind: 'text' | 'file';
+  createdAt: number;
+  iv: string;
+  ct: string;
+}): string {
+  return JSON.stringify([
+    'sotto-stored-v1',
+    input.id,
+    input.conversationId,
+    input.senderId,
+    input.kind,
+    input.createdAt,
+    input.iv,
+    input.ct,
+  ]);
 }
 
 export function chunkAad(
@@ -106,6 +156,210 @@ export function canonicalChunk(wire: Omit<ChunkWire, 'sig'>): string {
   ]);
 }
 
+export async function packStoredTextMessage(input: {
+  key: string;
+  id: string;
+  conversationId: string;
+  senderId: string;
+  text: string;
+  createdAt: number;
+  signPrivateKey: PrivateKeyMaterial;
+}): Promise<{
+  id: string;
+  conversationId: string;
+  kind: 'text';
+  iv: string;
+  ciphertext: string;
+  sig: string;
+  byteSize: number;
+  clientCreatedAt: number;
+}> {
+  const plaintext = textPlainSchema.parse({ text: input.text });
+  const aad = storedMessageAad(
+    input.conversationId,
+    input.id,
+    input.senderId,
+    'text',
+    input.createdAt,
+  );
+  const { iv, ct } = await encryptJson(input.key, plaintext, aad);
+  if (ct.length > MAX_TEXT_CIPHERTEXT) {
+    throw new Error('Encrypted message exceeds maximum size.');
+  }
+  const sig = await signPayload(
+    input.signPrivateKey,
+    canonicalStoredMessage({
+      id: input.id,
+      conversationId: input.conversationId,
+      senderId: input.senderId,
+      kind: 'text',
+      createdAt: input.createdAt,
+      iv,
+      ct,
+    }),
+  );
+  return {
+    id: input.id,
+    conversationId: input.conversationId,
+    kind: 'text',
+    iv,
+    ciphertext: ct,
+    sig,
+    byteSize: ct.length,
+    clientCreatedAt: input.createdAt,
+  };
+}
+
+export async function packStoredFileMessage(input: {
+  key: string;
+  id: string;
+  conversationId: string;
+  senderId: string;
+  name: string;
+  mime: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  caption?: string;
+  createdAt: number;
+  signPrivateKey: PrivateKeyMaterial;
+}): Promise<{
+  id: string;
+  conversationId: string;
+  kind: 'file';
+  iv: string;
+  ciphertext: string;
+  sig: string;
+  byteSize: number;
+  clientCreatedAt: number;
+}> {
+  if (input.bytes.byteLength === 0 || input.bytes.byteLength > MAX_FILE_BYTES) {
+    throw new Error('Attachment exceeds the 256 KB storage limit.');
+  }
+  const plaintext = storedFilePlainSchema.parse({
+    name: input.name,
+    mime: input.mime,
+    size: input.bytes.byteLength,
+    data: bytesToBase64(input.bytes),
+    caption: input.caption || undefined,
+  });
+  const aad = storedMessageAad(
+    input.conversationId,
+    input.id,
+    input.senderId,
+    'file',
+    input.createdAt,
+  );
+  const { iv, ct } = await encryptJson(input.key, plaintext, aad);
+  if (ct.length > MAX_CIPHERTEXT) {
+    throw new Error('Encrypted attachment exceeds maximum size.');
+  }
+  const sig = await signPayload(
+    input.signPrivateKey,
+    canonicalStoredMessage({
+      id: input.id,
+      conversationId: input.conversationId,
+      senderId: input.senderId,
+      kind: 'file',
+      createdAt: input.createdAt,
+      iv,
+      ct,
+    }),
+  );
+  return {
+    id: input.id,
+    conversationId: input.conversationId,
+    kind: 'file',
+    iv,
+    ciphertext: ct,
+    sig,
+    byteSize: ct.length,
+    clientCreatedAt: input.createdAt,
+  };
+}
+
+export async function unpackStoredMessage(
+  row: StoredMessageRow,
+  key: string,
+  senderPublicKey: PublicKeyBundle,
+): Promise<DecryptedStoredMessage | null> {
+  if (
+    !row.id ||
+    !row.iv ||
+    !row.ciphertext ||
+    !row.sig ||
+    row.iv.length > 64 ||
+    row.sig.length > 256 ||
+    row.ciphertext.length > MAX_CIPHERTEXT
+  ) {
+    return null;
+  }
+
+  const verified = await verifyPayload(
+    senderPublicKey.sig,
+    canonicalStoredMessage({
+      id: row.id,
+      conversationId: row.conversation_id,
+      senderId: row.sender_id,
+      kind: row.kind,
+      createdAt: row.client_created_at,
+      iv: row.iv,
+      ct: row.ciphertext,
+    }),
+    row.sig,
+  );
+  if (!verified) return null;
+
+  const aad = storedMessageAad(
+    row.conversation_id,
+    row.id,
+    row.sender_id,
+    row.kind,
+    row.client_created_at,
+  );
+
+  try {
+    const raw = await decryptJson<unknown>(key, row.iv, row.ciphertext, aad);
+    if (row.kind === 'text') {
+      const parsed = textPlainSchema.parse(raw);
+      return { kind: 'text', text: parsed.text };
+    }
+    const parsed = storedFilePlainSchema.parse(raw);
+    const bytes = base64ToBytes(parsed.data);
+    if (bytes.byteLength !== parsed.size || bytes.byteLength > MAX_FILE_BYTES) {
+      return null;
+    }
+    if (!hasMagicBytes(bytes.subarray(0, 32), parsed.mime)) {
+      return null;
+    }
+    return {
+      kind: 'file',
+      name: parsed.name,
+      mime: parsed.mime,
+      size: parsed.size,
+      bytes,
+      caption: parsed.caption,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveSeenTimers(
+  seenAtIso: string | null,
+  expiresAtIso: string | null,
+): { seenAt: number | null; expiresAt: number | null } {
+  if (!seenAtIso && !expiresAtIso) {
+    return { seenAt: null, expiresAt: null };
+  }
+  const now = Date.now();
+  const parsedSeen = seenAtIso ? Date.parse(seenAtIso) : NaN;
+  const parsedExp = expiresAtIso ? Date.parse(expiresAtIso) : NaN;
+  const seenAt = Number.isFinite(parsedSeen) ? parsedSeen : now;
+  const rawExp = Number.isFinite(parsedExp) ? parsedExp : seenAt + MESSAGE_TTL_MS;
+  // Never extend beyond 1 minute from local observation even if clocks drift slightly.
+  const expiresAt = Math.min(rawExp, now + MESSAGE_TTL_MS + 2_000);
+  return { seenAt, expiresAt };
+}
+
 export async function encryptTextWire(input: {
   key: string;
   id: string;
@@ -113,7 +367,7 @@ export async function encryptTextWire(input: {
   senderId: string;
   text: string;
   createdAt: number;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<MessageWire> {
   const plaintext = textPlainSchema.parse({ text: input.text });
   const aad = messageAad(input.conversationId, input.id, input.senderId, input.createdAt);
@@ -149,7 +403,7 @@ export async function encryptFileMetaWire(input: {
   senderId: string;
   file: FilePlain;
   createdAt: number;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<MessageWire> {
   const plaintext = filePlainSchema.parse(input.file);
   const aad = messageAad(input.conversationId, input.id, input.senderId, input.createdAt);
@@ -186,7 +440,7 @@ export async function encryptChunkWire(input: {
   createdAt: number;
   index: number;
   bytes: Uint8Array<ArrayBuffer>;
-  signPrivateKey: PublicKeyBundle['sig'];
+  signPrivateKey: PrivateKeyMaterial;
 }): Promise<ChunkWire> {
   const aad = chunkAad(
     input.conversationId,
@@ -273,8 +527,6 @@ export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
 
 export function clampExpiry(createdAt: number): number {
   const now = Date.now();
-  // Never grant more than the full TTL from the moment a message is received,
-  // even when the sender's clock is ahead, and expire stale messages at once.
   const sentAt = Math.min(Math.max(createdAt, now - MESSAGE_TTL_MS), now);
   return sentAt + MESSAGE_TTL_MS;
 }
