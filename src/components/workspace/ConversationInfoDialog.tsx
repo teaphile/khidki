@@ -209,7 +209,7 @@ export function ConversationInfoDialog({
             seed={conversationSeed(conversation, myId)}
             dpUrl={conversationDpUrl(conversation, myId)}
             group={conversation.kind === 'group'}
-            size="large"
+            size="lg"
           />
           <div>
             <h3>{title}</h3>
@@ -312,7 +312,7 @@ export function ConversationInfoDialog({
                     name={member.displayName}
                     seed={member.userId}
                     dpUrl={member.avatarUrl}
-                    size="small"
+                    size="sm"
                   />
                   <div>
                     <strong>
@@ -382,7 +382,7 @@ export function ConversationInfoDialog({
                           name={person.display_name}
                           seed={person.id}
                           dpUrl={person.avatar_url}
-                          size="small"
+                          size="sm"
                         />
                         <span>
                           <strong>{person.display_name}</strong>

@@ -292,6 +292,10 @@
   color: #ffffff;
 }
 
+.timer--waiting {
+  opacity: 0.92;
+}
+
 .timer--urgent {
   background: var(--danger-soft) !important;
   color: var(--danger) !important;

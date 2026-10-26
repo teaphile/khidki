@@ -170,7 +170,7 @@ export function NewGroupDialog({
                   name={person.display_name}
                   seed={person.id}
                   dpUrl={person.avatar_url}
-                  size="small"
+                  size="xs"
                 />
                 <span>{person.display_name}</span>
                 <button
@@ -200,7 +200,7 @@ export function NewGroupDialog({
                   name={person.display_name}
                   seed={person.id}
                   dpUrl={person.avatar_url}
-                  size="small"
+                  size="sm"
                 />
                 <span>
                   <strong>{person.display_name}</strong>

@@ -33,7 +33,7 @@ describe('Khidki: KeyVault, 1m Post-Seen Queue & Image-Only DP', () => {
   it('wraps and restores E2EE identity keys with PBKDF2-SHA256 + AES-256-GCM across multi-day logouts', async () => {
     clearIdentityMemoryCache();
     const { identity, vault } = await stageSignupIdentityWithVault(
-      'ashish@gmail.com',
+      'aum@gmail.com',
       'StrongPass2026',
     );
     expect(parseKeyVault(vault)).toEqual(vault);

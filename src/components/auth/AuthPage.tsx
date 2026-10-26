@@ -471,8 +471,8 @@ export function AuthPage() {
                   {mode === 'signup' ? (
                     <>
                       <DpUploadControl
-                        name={displayName || 'You'}
-                        seed={username || 'khidki'}
+                        name={displayName || 'aum'}
+                        seed={username || 'aum01'}
                         value={dpUrl}
                         onChange={setDpUrl}
                         disabled={busy}
@@ -486,7 +486,7 @@ export function AuthPage() {
                             onChange={(event) => setDisplayName(event.target.value)}
                             autoComplete="name"
                             maxLength={36}
-                            placeholder="Ashish"
+                            placeholder="aum"
                             required
                           />
                         </label>
@@ -505,7 +505,7 @@ export function AuthPage() {
                               autoComplete="username"
                               minLength={3}
                               maxLength={10}
-                              placeholder="ashish01"
+                              placeholder="aum01"
                               spellCheck={false}
                               autoCapitalize="none"
                               required
@@ -534,7 +534,7 @@ export function AuthPage() {
                         onChange={(event) => setEmail(event.target.value)}
                         autoComplete="email"
                         maxLength={254}
-                        placeholder="you@gmail.com"
+                        placeholder="aum@gmail.com"
                         autoCapitalize="none"
                         required
                       />

@@ -44,43 +44,46 @@ export function DpUploadControl({ name, seed, value, onChange, disabled = false 
   return (
     <div className="dp-control">
       <div className="dp-control__main">
-        <Avatar name={name || 'You'} seed={seed || 'khidki'} dpUrl={value} size="lg" />
-        <div className="dp-control__copy">
-          <strong>DP</strong>
-          <span>Optional display picture. Any image format works.</span>
-          <div className="dp-control__actions">
-            <input
-              ref={inputRef}
-              type="file"
-              accept={DP_ACCEPT}
-              onChange={handleFileChange}
-              hidden
-            />
+        <div className="dp-control__identity">
+          <Avatar name={name || 'aum'} seed={seed || 'aum01'} dpUrl={value} size="md" />
+          <div className="dp-control__copy">
+            <strong>Profile photo</strong>
+            <span>Optional · Any image format</span>
+          </div>
+        </div>
+        <div className="dp-control__actions">
+          <input
+            ref={inputRef}
+            type="file"
+            accept={DP_ACCEPT}
+            onChange={handleFileChange}
+            aria-label="Upload profile photo"
+            hidden
+          />
+          <button
+            type="button"
+            className="button button--secondary button--sm"
+            onClick={() => inputRef.current?.click()}
+            disabled={disabled || processing}
+          >
+            {processing ? (
+              <Loader2 className="spin" size={14} aria-hidden="true" />
+            ) : (
+              <ImagePlus size={14} aria-hidden="true" />
+            )}
+            {value ? 'Change photo' : 'Add photo'}
+          </button>
+          {value ? (
             <button
               type="button"
-              className="button button--ghost button--sm"
-              onClick={() => inputRef.current?.click()}
+              className="button button--ghost button--sm dp-control__remove"
+              onClick={handleRemove}
               disabled={disabled || processing}
             >
-              {processing ? (
-                <Loader2 className="spin" size={15} aria-hidden="true" />
-              ) : (
-                <ImagePlus size={15} aria-hidden="true" />
-              )}
-              {value ? 'Change DP' : 'Upload DP'}
+              <Trash2 size={14} aria-hidden="true" />
+              Remove
             </button>
-            {value ? (
-              <button
-                type="button"
-                className="button button--ghost button--sm dp-control__remove"
-                onClick={handleRemove}
-                disabled={disabled || processing}
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                Remove
-              </button>
-            ) : null}
-          </div>
+          ) : null}
         </div>
       </div>
       {error ? (

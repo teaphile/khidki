@@ -119,6 +119,25 @@
   width: 100%;
 }
 
+.auth-shell--centered {
+  justify-content: space-between;
+}
+
+.auth-panel--solo {
+  width: min(450px, calc(100% - 32px));
+  margin: auto;
+  padding: 20px 0 36px;
+}
+
+.auth-tabs {
+  width: 100%;
+}
+
+.form-grid {
+  display: grid;
+  gap: 12px;
+}
+
 .auth-card,
 .setup-card {
   display: flex;

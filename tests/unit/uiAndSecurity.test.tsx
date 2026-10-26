@@ -71,7 +71,7 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     expect(container.textContent).toMatch(/1m after seen|one minute/i);
   });
 
-  it('replaces preset stickers with an optional image-only DP control and enforces 3-10 alphanumeric username input on sign up', async () => {
+  it('replaces preset stickers with a clean Profile photo control and uses aum / aum01 placeholders on sign up', async () => {
     await act(async () => {
       root.render(
         <MemoryRouter initialEntries={['/']}>
@@ -95,6 +95,9 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
 
     expect(container.querySelector('.avatar-picker')).toBeNull();
     expect(container.querySelector('.dp-control')).not.toBeNull();
+    expect(container.textContent).toContain('Profile photo');
+    expect(container.textContent).toContain('Add photo');
+    expect(container.textContent).not.toMatch(/\bDP\b/);
     const dpFileInput = container.querySelector(
       '.dp-control input[type="file"]',
     ) as HTMLInputElement | null;
@@ -102,10 +105,16 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
     expect(dpFileInput?.accept).toBe('image/*');
     expect(container.textContent).not.toContain('+');
 
+    const nameInput = container.querySelector(
+      'input[autocomplete="name"]',
+    ) as HTMLInputElement | null;
+    expect(nameInput?.placeholder).toBe('aum');
+
     const usernameInput = container.querySelector(
       'input[autocomplete="username"]',
     ) as HTMLInputElement | null;
     expect(usernameInput).not.toBeNull();
+    expect(usernameInput?.placeholder).toBe('aum01');
     expect(usernameInput?.maxLength).toBe(10);
     expect(usernameInput?.minLength).toBe(3);
   });
@@ -119,7 +128,7 @@ describe('AuthPage, MessageBubble & LinkDialog UI security regressions', () => {
             id: 'msg-1',
             conversationId: 'conv-1',
             senderId: 'user-1',
-            senderName: 'Ashish',
+            senderName: 'aum',
             kind: 'text',
             text: 'Still waiting safely after 3 days offline',
             createdAt: threeDaysAgo,

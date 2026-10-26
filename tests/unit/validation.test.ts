@@ -12,7 +12,7 @@ import {
 
 describe('validation', () => {
   it('accepts trusted real email providers and normalizes case', () => {
-    expect(emailSchema.parse('  Ashish@Gmail.com ')).toBe('ashish@gmail.com');
+    expect(emailSchema.parse('  Aum@Gmail.com ')).toBe('aum@gmail.com');
     expect(emailSchema.parse('student@iitk.ac.in')).toBe('student@iitk.ac.in');
     expect(emailSchema.parse('user@proton.me')).toBe('user@proton.me');
     expect(isTrustedEmailDomain('person@outlook.com')).toBe(true);
@@ -24,7 +24,7 @@ describe('validation', () => {
     expect(emailSchema.safeParse('person@yopmail.com').success).toBe(false);
     expect(emailSchema.safeParse('person@example.com').success).toBe(false);
     expect(emailSchema.safeParse('person@randomfake999.xyz').success).toBe(false);
-    expect(emailSchema.safeParse('ashish+spam@gmail.com').success).toBe(false);
+    expect(emailSchema.safeParse('aum+spam@gmail.com').success).toBe(false);
   });
 
   it('rejects malformed emails', () => {
@@ -48,7 +48,7 @@ describe('validation', () => {
     expect(usernameSchema.safeParse('admin').success).toBe(false);
     expect(usernameSchema.safeParse('sotto').success).toBe(false);
     // Input sanitizer strips disallowed chars and caps at 10
-    expect(sanitizeUsernameInput('Ashish_Kumar!2026')).toBe('ashishkuma');
+    expect(sanitizeUsernameInput('Aum_User!2026')).toBe('aumuser202');
   });
 
   it('requires a strong enough password', () => {

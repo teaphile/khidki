@@ -106,7 +106,7 @@ export type DpPrepareResult = { ok: true; dataUrl: string } | { ok: false; error
 
 export async function prepareDpImage(file: File): Promise<DpPrepareResult> {
   if (!file || file.size === 0) {
-    return { ok: false, error: 'Choose a valid image file for your DP.' };
+    return { ok: false, error: 'Choose a valid image file for your profile photo.' };
   }
   if (file.size > MAX_DP_INPUT_BYTES) {
     return { ok: false, error: 'Choose an image smaller than 10 MB.' };
@@ -120,20 +120,20 @@ export async function prepareDpImage(file: File): Promise<DpPrepareResult> {
     return { ok: false, error: 'SVG files are not allowed. Choose a photo or image file.' };
   }
   if (mime && !mime.startsWith('image/')) {
-    return { ok: false, error: 'Only image files are allowed for DP.' };
+    return { ok: false, error: 'Only image files are allowed for your profile photo.' };
   }
   if (!mime && !IMAGE_EXTENSIONS.has(ext)) {
-    return { ok: false, error: 'Only image files are allowed for DP.' };
+    return { ok: false, error: 'Only image files are allowed for your profile photo.' };
   }
   if (await looksLikeSvgOrMarkup(file)) {
-    return { ok: false, error: 'Only valid image files are allowed for DP.' };
+    return { ok: false, error: 'Only valid image files are allowed for your profile photo.' };
   }
 
   let decoded: Awaited<ReturnType<typeof decodeImageSource>> | null = null;
   try {
     decoded = await decodeImageSource(file);
     if (decoded.width < 1 || decoded.height < 1) {
-      return { ok: false, error: 'Only valid image files are allowed for DP.' };
+      return { ok: false, error: 'Only valid image files are allowed for your profile photo.' };
     }
 
     const side = Math.min(decoded.width, decoded.height);
@@ -164,9 +164,9 @@ export async function prepareDpImage(file: File): Promise<DpPrepareResult> {
       }
     }
 
-    return { ok: false, error: 'Choose a simpler photo for your DP.' };
+    return { ok: false, error: 'Choose a simpler image for your profile photo.' };
   } catch {
-    return { ok: false, error: 'Only valid image files are allowed for DP.' };
+    return { ok: false, error: 'Only valid image files are allowed for your profile photo.' };
   } finally {
     decoded?.close();
   }

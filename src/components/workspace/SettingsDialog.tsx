@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
@@ -33,6 +33,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
   const hasProfileChanges =
     displayName.trim() !== profile.display_name || (dpUrl ?? null) !== (profile.avatar_url ?? null);
+  const deleteMatches = confirmDelete.trim().toLowerCase() === profile.username.toLowerCase();
 
   const handleSave = async () => {
     const parsed = displayNameSchema.safeParse(displayName);
@@ -63,7 +64,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   };
 
   const handleDelete = async () => {
-    if (confirmDelete.trim().toLowerCase() !== profile.username.toLowerCase()) return;
+    if (!deleteMatches) return;
     setDeleting(true);
     try {
       const userId = profile.id;
@@ -119,7 +120,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       }
     >
       <div className="settings-stack">
-        <section className="settings-section">
+        <section className="settings-card">
           <DpUploadControl
             name={displayName || profile.display_name}
             seed={profile.id}
@@ -144,7 +145,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           </div>
         </section>
 
-        <section className="settings-section">
+        <section className="settings-card settings-card--inline">
           <span className="section-label">Appearance</span>
           <div className="segmented" role="radiogroup" aria-label="Color theme">
             {themes.map(({ value, label, icon: Icon }) => (
@@ -156,63 +157,68 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 className={mode === value ? 'is-active' : ''}
                 onClick={() => setMode(value)}
               >
-                <Icon size={15} aria-hidden="true" />
+                <Icon size={14} aria-hidden="true" />
                 {label}
               </button>
             ))}
           </div>
         </section>
 
-        <section className="settings-section settings-section--session">
+        <section className="settings-card settings-card--session">
           <div className="settings-session-copy">
             <span className="section-label">Log out</span>
             <p className="muted-note">
-              Signs out on this device only. Your username, DP, and encrypted key vault remain safe
-              in cloud for your next sign in.
+              Signs out on this device only. Your username, photo, and encrypted key vault stay safe
+              in cloud.
             </p>
           </div>
           <button
             type="button"
-            className="button button--secondary"
+            className="button button--secondary button--sm"
             onClick={() => void handleSignOut()}
             disabled={signingOut || deleting}
           >
             {signingOut ? (
-              <Loader2 className="spin" size={16} aria-hidden="true" />
+              <Loader2 className="spin" size={15} aria-hidden="true" />
             ) : (
-              <LogOut size={16} aria-hidden="true" />
+              <LogOut size={15} aria-hidden="true" />
             )}
             Log out
           </button>
         </section>
 
-        <section className="settings-section settings-section--danger">
-          <span className="section-label">Delete account permanently</span>
-          <p className="muted-note">
-            Erases your login, username, DP, encrypted key vault, messages, call signals, and
-            conversations from cloud and this device. Type <strong>{profile.username}</strong> to
-            confirm.
+        <section className="settings-danger-card" aria-label="Delete account permanently">
+          <div className="settings-danger-card__head">
+            <span className="settings-danger-card__title">
+              <AlertTriangle size={15} aria-hidden="true" />
+              Delete account permanently
+            </span>
+            <span className="settings-danger-card__badge">Irreversible</span>
+          </div>
+          <p className="settings-danger-card__copy">
+            Permanently erases your login, username, profile photo, encrypted key vault, chats, and
+            messages from cloud and this device. Type <strong>{profile.username}</strong> to unlock.
           </p>
           <div className="settings-danger-row">
             <input
               className="danger-input"
               value={confirmDelete}
               onChange={(event) => setConfirmDelete(event.target.value)}
-              placeholder={profile.username}
+              placeholder={`Type ${profile.username}`}
               aria-label={`Type ${profile.username} to confirm deletion`}
+              spellCheck={false}
+              autoCapitalize="none"
             />
             <button
               type="button"
               className="button button--danger"
-              disabled={
-                deleting || confirmDelete.trim().toLowerCase() !== profile.username.toLowerCase()
-              }
+              disabled={deleting || !deleteMatches}
               onClick={() => void handleDelete()}
             >
               {deleting ? (
-                <Loader2 className="spin" size={16} aria-hidden="true" />
+                <Loader2 className="spin" size={15} aria-hidden="true" />
               ) : (
-                <Trash2 size={16} aria-hidden="true" />
+                <Trash2 size={15} aria-hidden="true" />
               )}
               Delete account
             </button>
