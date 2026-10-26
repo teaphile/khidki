@@ -15,16 +15,20 @@ test('renders an email-only sign-in screen with no phone fields', async ({ page 
   await expect(page.locator('input[type="tel"]')).toHaveCount(0);
 });
 
-test('sign-up shows the required identity fields and password rules', async ({ page }) => {
+test('sign-up shows profile photo control, required identity fields, and password rules', async ({
+  page,
+}) => {
   await page.goto('/');
   await page.getByRole('tab', { name: 'Sign up' }).click();
 
   await expect(page.getByRole('heading', { name: 'Create your Khidki profile' })).toBeVisible();
-  await expect(page.getByLabel('Display name')).toBeVisible();
-  await expect(page.getByLabel('Username')).toBeVisible();
+  await expect(page.getByText('Profile photo', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add photo' })).toBeVisible();
+  await expect(page.getByLabel('Display name')).toHaveAttribute('placeholder', 'aum');
+  await expect(page.getByLabel(/Username/)).toHaveAttribute('placeholder', 'aum01');
   await expect(page.getByLabel('Confirm password')).toBeVisible();
-  await expect(page.getByText(/verified email address is required/i)).toBeVisible();
-  await expect(page.getByText(/No phone numbers\./i)).toBeVisible();
+  await expect(page.getByText(/Email verification is required/i)).toBeVisible();
+  await expect(page.getByText(/No phone number needed\./i)).toBeVisible();
   await expect(
     page.getByRole('list', { name: 'Password requirements' }).getByRole('listitem'),
   ).toHaveCount(3);
@@ -39,14 +43,18 @@ test('validates the sign-in email before contacting the server', async ({ page }
   await expect(page.getByRole('alert')).toHaveText('Enter a valid email address.');
 });
 
-test('rejects disposable email domains in the browser', async ({ page }) => {
+test('rejects disposable email domains during sign-up', async ({ page }) => {
   await page.goto('/');
+  await page.getByRole('tab', { name: 'Sign up' }).click();
+  await page.getByLabel('Display name').fill('aum');
+  await page.getByLabel(/Username/).fill('aum01');
   await page.getByLabel('Email address').fill('person@mailinator.com');
   await page.getByLabel('Password', { exact: true }).fill('longenough1');
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByLabel('Confirm password').fill('longenough1');
+  await page.getByRole('button', { name: 'Create account' }).click();
 
   await expect(page.getByRole('alert')).toHaveText(
-    'Disposable email addresses are not supported. Use a permanent inbox.',
+    'Temporary or disposable email addresses are not allowed.',
   );
 });
 
@@ -54,9 +62,9 @@ test('blocks reserved usernames during sign-up', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('tab', { name: 'Sign up' }).click();
 
-  await page.getByLabel('Display name').fill('Ada Lovelace');
-  await page.getByLabel('Username').fill('sotto');
-  await page.getByLabel('Email address').fill('ada@example.com');
+  await page.getByLabel('Display name').fill('aum');
+  await page.getByLabel(/Username/).fill('khidki');
+  await page.getByLabel('Email address').fill('aum@gmail.com');
   await page.getByLabel('Password', { exact: true }).fill('longenough1');
   await page.getByLabel('Confirm password').fill('longenough1');
   await page.getByRole('button', { name: 'Create account' }).click();
@@ -68,9 +76,9 @@ test('enforces password strength and confirmation', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('tab', { name: 'Sign up' }).click();
 
-  await page.getByLabel('Display name').fill('Ada Lovelace');
-  await page.getByLabel('Username').fill('ada_lovelace');
-  await page.getByLabel('Email address').fill('ada@example.com');
+  await page.getByLabel('Display name').fill('aum');
+  await page.getByLabel(/Username/).fill('aum01');
+  await page.getByLabel('Email address').fill('aum@gmail.com');
   await page.getByLabel('Password', { exact: true }).fill('short');
   await page.getByLabel('Confirm password').fill('short');
   await page.getByRole('button', { name: 'Create account' }).click();
@@ -124,7 +132,7 @@ test('shows an invalid reset link when there is no recovery session', async ({ p
   await page.goto('/reset-password');
 
   await expect(
-    page.getByRole('heading', { name: 'This reset link is invalid or expired.' }),
+    page.getByRole('heading', { name: 'This reset link is invalid or expired' }),
   ).toBeVisible();
   await expect(page.getByRole('button', { name: /Return to sign in/i })).toBeVisible();
 });

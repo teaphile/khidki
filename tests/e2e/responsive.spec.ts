@@ -49,7 +49,7 @@ for (const theme of ['light', 'dark'] as const) {
 
       await page.goto('/reset-password');
       await expect(
-        page.getByRole('heading', { name: 'This reset link is invalid or expired.' }),
+        page.getByRole('heading', { name: 'This reset link is invalid or expired' }),
       ).toBeVisible();
 
       await expectNoHorizontalOverflow(page, `${label} reset password`);

@@ -11,5 +11,5 @@ Khidki uses browser-side Web Crypto primitives paired with PostgreSQL Row Level 
 ## Cloud & Auth Protections
 
 - **Email Verification & Link Hardening**: Disposable mail domains and `+` aliases are rejected at both client and database trigger layers. Auth redirect URIs are locked to the production origin, and single-use auth codes/tokens are scrubbed immediately from the browser URL via `history.replaceState`.
-- **Strict Image-Only DP**: Display Pictures (`avatar_url`) are decoded as raster bitmaps, stripped of EXIF metadata on an offscreen canvas, re-encoded under `24 KB`, and checked by a PostgreSQL regex constraint blocking SVG/XML/HTML/non-image payloads.
+- **Strict Image-Only Profile Photo**: Profile photos (`avatar_url`) are decoded as raster bitmaps, stripped of EXIF metadata on an offscreen canvas, re-encoded under `24 KB`, and checked by a PostgreSQL regex constraint blocking SVG/XML/HTML/non-image payloads.
 - **Immutable 1-Minute Self-Cleaning Queue**: `public.messages` blocks content edits via database trigger, caps per-user unseen attachment storage to protect Free Tier limits, never auto-marks chats seen on login, and purges messages 1 minute (`60s`) after being seen.

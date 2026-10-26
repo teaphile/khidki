@@ -117,6 +117,7 @@
 
 .auth-panel {
   width: 100%;
+  min-width: 0;
 }
 
 .auth-shell--centered {
@@ -335,7 +336,7 @@
   }
 
   .auth-stage {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding: 8px 16px 24px;
   }
 
