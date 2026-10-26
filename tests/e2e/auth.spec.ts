@@ -54,7 +54,7 @@ test('rejects disposable email domains during sign-up', async ({ page }) => {
   await page.getByRole('button', { name: 'Create account' }).click();
 
   await expect(page.getByRole('alert')).toHaveText(
-    'Temporary or disposable email addresses are not allowed.',
+    'Temporary or unverified email domains are blocked. Use Gmail, Outlook, iCloud, Yahoo, Proton, or Zoho.',
   );
 });
 
@@ -82,7 +82,7 @@ test('enforces password strength and confirmation', async ({ page }) => {
   await page.getByLabel('Password', { exact: true }).fill('short');
   await page.getByLabel('Confirm password').fill('short');
   await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page.getByRole('alert')).toHaveText('Password must be at least 10 characters.');
+  await expect(page.getByRole('alert')).toHaveText('Use at least 10 characters.');
 
   await page.getByLabel('Password', { exact: true }).fill('longenough1');
   await page.getByLabel('Confirm password').fill('longenough2');

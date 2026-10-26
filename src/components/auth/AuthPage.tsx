@@ -85,7 +85,7 @@ function friendlyAuthError(error: unknown): string {
   if (/password should|password is too/i.test(message)) {
     return 'Choose a stronger password with at least 10 characters, a letter, and a number.';
   }
-  if (/username|duplicate key/i.test(message)) {
+  if (/duplicate key|already taken/i.test(message)) {
     return 'That username or email is already taken.';
   }
   if (/fetch|network|failed to fetch/i.test(message)) {
@@ -167,6 +167,13 @@ export function AuthPage() {
     setNeedsConfirmation(false);
     setPassword('');
     setConfirmPassword('');
+    if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+      try {
+        window.scrollTo(0, 0);
+      } catch {
+        // Ignore in non-scrolling test environments (e.g. jsdom).
+      }
+    }
   };
 
   const handleSignIn = async () => {

@@ -97,6 +97,7 @@ const RESERVED_USERNAMES = new Set([
   'mail',
   'mod',
   'null',
+  'khidki',
   'official',
   'root',
   'security',
